@@ -16,7 +16,7 @@ def verify_implementation():
     # Check 1: NATS messaging library has new methods
     print("\n1. Checking NATS messaging library...")
     checks_total += 1
-    nats_file = "/Users/akwa/dev-agents/swe-1.6-gen/services/agent-service/internal/messaging/nats.py"
+    nats_file = "/Users/akwa/dev-agents/ai-platform-swe-1.6-gen/services/agent-service/internal/messaging/nats.py"
     if os.path.exists(nats_file):
         with open(nats_file, 'r') as f:
             content = f.read()

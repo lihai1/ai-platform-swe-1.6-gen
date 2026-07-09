@@ -53,8 +53,12 @@ services:
       PORT: 8080
       DISABLE_AUTH: "true"
       NATS_URL: nats://nats:4222
+      ORCHESTRATOR_TYPE: docker-bind
+      DOCKER_SOCKET_PATH: /var/run/docker.sock
     ports:
       - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
 
 volumes:
   postgres_data:

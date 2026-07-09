@@ -1,6 +1,9 @@
 package service
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/agentic-engineering/control-plane/internal/models"
 	"github.com/agentic-engineering/control-plane/internal/repository"
 )
@@ -24,6 +27,35 @@ func (s *ProjectService) ListProjects() ([]*models.Project, error) {
 }
 
 func (s *ProjectService) CreateProject(orgID, name, description string) (*models.Project, error) {
+	// If no organization provided, find-or-create the default one
+	if orgID == "" {
+		existing, err := s.orgRepo.GetBySlug("default")
+		if err == nil {
+			orgID = existing.ID
+		} else {
+			defaultOrg := &models.Organization{
+				Name: "Default Organization",
+				Slug: "default",
+			}
+			org, err := s.orgRepo.Create(defaultOrg)
+			if err != nil {
+				// If it's a duplicate key error, the org already exists - try to get it again
+				if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
+					existing, retryErr := s.orgRepo.GetBySlug("default")
+					if retryErr == nil {
+						orgID = existing.ID
+					} else {
+						return nil, fmt.Errorf("failed to get default organization after duplicate error: %w", retryErr)
+					}
+				} else {
+					return nil, fmt.Errorf("failed to create default organization: %w", err)
+				}
+			} else {
+				orgID = org.ID
+			}
+		}
+	}
+
 	project := &models.Project{
 		OrganizationID: orgID,
 		Name:           name,

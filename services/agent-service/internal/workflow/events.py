@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from internal.models import AgentEvent, AgentRun
 from internal.messaging.nats import NATSMessaging
+from internal.workflow.event_streams import get_event_stream, remove_event_stream
 import json
 import asyncio
 import os
@@ -27,55 +28,82 @@ async def event_generator(
     session: AsyncSession,
     last_event_id: Optional[int] = None
 ) -> AsyncGenerator[dict, None]:
-    """Generate SSE events for a run"""
+    """Generate SSE events for a run from both queue and database"""
+    
+    # Get or create event queue for this run
+    event_queue = await get_event_stream(run_id)
     
     # If last_event_id is provided, start from that point
     start_sequence = last_event_id + 1 if last_event_id else 0
     
-    while True:
-        # Query for new events
-        query = select(AgentEvent).where(
-            AgentEvent.run_id == run_id,
-            AgentEvent.sequence_number >= start_sequence
-        ).order_by(AgentEvent.sequence_number)
+    try:
+        while True:
+            # First, check queue for real-time events from NATS
+            try:
+                # Non-blocking get with timeout
+                event = await asyncio.wait_for(event_queue.get(), timeout=0.1)
+                yield {
+                    "id": start_sequence,
+                    "event": event["event_type"],
+                    "data": json.dumps({
+                        "run_id": event["run_id"],
+                        "event_type": event["event_type"],
+                        "event_data": event["payload"],
+                        "timestamp": event.get("timestamp")
+                    })
+                }
+                start_sequence += 1
+            except asyncio.TimeoutError:
+                # No events in queue, check database
+                pass
+            
+            # Then, query database for persisted events
+            query = select(AgentEvent).where(
+                AgentEvent.chat_id == run_id,
+                AgentEvent.sequence_number >= start_sequence
+            ).order_by(AgentEvent.sequence_number)
+            
+            result = await session.execute(query)
+            events = result.scalars().all()
+            
+            for event in events:
+                yield {
+                    "id": event.sequence_number,
+                    "event": event.event_type,
+                    "data": json.dumps({
+                        "run_id": event.chat_id,
+                        "step_id": event.step_id,
+                        "event_type": event.event_type,
+                        "event_data": event.event_data,
+                        "created_at": event.created_at.isoformat()
+                    })
+                }
+                start_sequence = event.sequence_number + 1
+            
+            # Check if run is in terminal state
+            run_query = select(AgentRun).where(AgentRun.id == run_id)
+            run_result = await session.execute(run_query)
+            run = run_result.scalar_one_or_none()
+            
+            if run and run.status in ["COMPLETED", "FAILED", "CANCELLED", "BUDGET_EXCEEDED"]:
+                # Send final event and stop
+                yield {
+                    "id": start_sequence,
+                    "event": "run_complete",
+                    "data": json.dumps({
+                        "run_id": run_id,
+                        "status": run.status,
+                        "error_message": run.error_message
+                    })
+                }
+                break
+            
+            # Small sleep to prevent tight loop
+            await asyncio.sleep(0.1)
+    finally:
+        # Cleanup queue when client disconnects
+        await remove_event_stream(run_id)
         
-        result = await session.execute(query)
-        events = result.scalars().all()
-        
-        for event in events:
-            yield {
-                "id": event.sequence_number,
-                "event": event.event_type,
-                "data": json.dumps({
-                    "run_id": event.run_id,
-                    "step_id": event.step_id,
-                    "event_type": event.event_type,
-                    "event_data": event.event_data,
-                    "created_at": event.created_at.isoformat()
-                })
-            }
-            start_sequence = event.sequence_number + 1
-        
-        # Check if run is in terminal state
-        run_query = select(AgentRun).where(AgentRun.id == run_id)
-        run_result = await session.execute(run_query)
-        run = run_result.scalar_one_or_none()
-        
-        if run and run.status in ["COMPLETED", "FAILED", "CANCELLED", "BUDGET_EXCEEDED"]:
-            # Send final event and stop
-            yield {
-                "id": start_sequence,
-                "event": "run_complete",
-                "data": json.dumps({
-                    "run_id": run_id,
-                    "status": run.status,
-                    "error_message": run.error_message
-                })
-            }
-            break
-        
-        # Wait before polling again
-        await asyncio.sleep(0.5)
 
 
 async def stream_events(
@@ -109,7 +137,7 @@ async def publish_event(
     """Publish an event to the database and NATS"""
 
     # Get the next sequence number for this run
-    query = select(AgentEvent).where(AgentEvent.run_id == run_id).order_by(
+    query = select(AgentEvent).where(AgentEvent.chat_id == run_id).order_by(
         AgentEvent.sequence_number.desc()
     )
     result = await session.execute(query)
@@ -118,7 +146,7 @@ async def publish_event(
     next_sequence = (last_event.sequence_number + 1) if last_event else 0
 
     event = AgentEvent(
-        run_id=run_id,
+        chat_id=run_id,
         step_id=step_id,
         event_type=event_type,
         event_data=event_data,
@@ -135,7 +163,6 @@ async def publish_event(
         await nats.publish_event(
             event_type=event_type,
             run_id=run_id,
-            chat_id=run_id,  # chat_id = run_id
             payload={
                 "event_type": event_type,
                 "run_id": run_id,

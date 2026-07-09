@@ -6,7 +6,7 @@ import { lastValueFrom } from 'rxjs';
 
 interface AgentEvent {
   id: string;
-  run_id: string;
+  chat_id: string;
   step_id: string | null;
   event_type: string;
   event_data: any;
@@ -16,7 +16,7 @@ interface AgentEvent {
 
 interface AgentStep {
   id: string;
-  run_id: string;
+  chat_id: string;
   phase: string;
   agent_name: string;
   status: string;
@@ -201,7 +201,7 @@ interface AgentStep {
   `]
 })
 export class ActivityComponent implements OnInit {
-  @Input() runId!: string;
+  @Input() chatId!: string;
   
   steps: AgentStep[] = [];
   events: AgentEvent[] = [];
@@ -219,14 +219,14 @@ export class ActivityComponent implements OnInit {
   }
   
   async loadActivity() {
-    if (!this.runId) return;
+    if (!this.chatId) return;
     
     const token = localStorage.getItem('jwt_token');
     
     try {
       // Load steps from API
       const steps = await lastValueFrom(
-        this.http.get<AgentStep[]>(`http://localhost:8000/agent/v1/runs/${this.runId}/steps`, {
+        this.http.get<AgentStep[]>(`http://localhost:8000/agent/v1/runs/${this.chatId}/steps`, {
           headers: { Authorization: `Bearer ${token}` }
         })
       );
@@ -234,7 +234,7 @@ export class ActivityComponent implements OnInit {
       
       // Load events from API
       const events = await lastValueFrom(
-        this.http.get<AgentEvent[]>(`http://localhost:8000/agent/v1/runs/${this.runId}/events`, {
+        this.http.get<AgentEvent[]>(`http://localhost:8000/agent/v1/runs/${this.chatId}/events`, {
           headers: { Authorization: `Bearer ${token}` }
         })
       );

@@ -3,24 +3,6 @@ from sqlalchemy.sql import func
 from internal.db import Base
 import uuid
 
-class ChatkitThread(Base):
-    __tablename__ = "chatkit_threads"
-    
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(String, nullable=False, index=True)
-    title = Column(String, nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-
-class ChatkitItem(Base):
-    __tablename__ = "chatkit_items"
-    
-    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    thread_id = Column(String, ForeignKey("chatkit_threads.id", ondelete="CASCADE"), nullable=False)
-    role = Column(String, nullable=False)  # "user" or "assistant"
-    content = Column(Text, nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
 class AgentRun(Base):
     __tablename__ = "agent_runs"
     
@@ -28,7 +10,7 @@ class AgentRun(Base):
     user_id = Column(String, nullable=False, index=True)
     project_id = Column(String, nullable=False, index=True)
     repository_id = Column(String, nullable=False, index=True)
-    chatkit_thread_id = Column(String, ForeignKey("chatkit_threads.id", ondelete="SET NULL"), nullable=True)
+    chatkit_thread_id = Column(String, nullable=True)  # ChatKit thread ID from OpenAI ChatKit SDK
     task = Column(Text, nullable=False)
     status = Column(String, nullable=False, index=True)  # CREATED, PREPARING_WORKSPACE, SCOUTING, PLANNING, DESIGNING, IMPLEMENTING, TESTING, REVIEWING, VERIFYING, REPAIRING, WAITING_APPROVAL, COMPLETED, FAILED, CANCELLED, BUDGET_EXCEEDED
     current_phase = Column(String, nullable=True)

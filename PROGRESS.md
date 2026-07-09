@@ -429,6 +429,15 @@
 - ✅ Agent worker NATS subscriptions (commands and events)
 - ✅ State event publishing (implementing → testing → reviewing)
 - ✅ UI mock mode toggle (user can enable/disable mock mode)
+- ✅ ChatKit E2E SSE streaming with mock-worker (first-flow complete)
+- ✅ AegisChatKitServer with async SSE streaming response
+- ✅ NatsBridge for subscribing to `agent.events.{run_id}.>` and yielding ChatKit events
+- ✅ ChatKit event mapper (progress_update, thread.item.done)
+- ✅ PostgreSQL-backed ChatKit store (threads, items)
+- ✅ Nginx SSE proxy configuration (proxy_buffering off, no-cache, 3600s timeouts)
+- ✅ Angular chat.component.ts handles ChatKit protocol events (progress_update, thread.item.done)
+- ✅ Pydantic icon validation fix (loader → agent)
+- ✅ Agent worker service and integration tests
 
 **Acceptance Criteria Met:**
 - ✅ Chat message triggers container creation (chat.start → control plane)
@@ -438,14 +447,28 @@
 - ✅ Worker executes workflow (LangGraph with checkpointer)
 - ✅ State events are published (real-time progress updates)
 - ✅ Complete message flow works end-to-end (user → agent execution)
+- ✅ ChatKit streaming response reaches the UI via SSE
+- ✅ UI displays progress updates and final assistant message
+- ✅ agent-worker integration tests pass (10/10)
+- ✅ agent-service integration tests pass (8/8)
 
 **Files Modified:**
 - `services/agent-service/internal/messaging/nats.py` (plain NATS for chat.start/chat.close)
 - `services/agent-service/app/worker.py` (event type handling)
-- `services/agent-service/internal/chatkit/router.py` (container creation trigger)
+- `services/agent-service/internal/chatkit/router.py` (container creation trigger, SSE endpoint)
+- `services/agent-service/internal/chatkit/server.py` (AegisChatKitServer)
+- `services/agent-service/internal/chatkit/nats_bridge.py` (NATS event subscription bridge)
+- `services/agent-service/internal/chatkit/event_mapper.py` (ChatKit event mapping)
+- `services/agent-service/internal/chatkit/store.py` (PostgreSQL store)
 - `services/agent-service/internal/workflow/checkpointer.py` (MemorySaver)
-- `docker-compose.yml` (MOCK_DOCKER=true)
-- `apps/web/src/app/chat/chat.component.ts` (mock mode toggle)
+- `services/agent-service/mock_worker.py` (mock worker for first-flow)
+- `services/agent-service/internal/workflow/event_streams.py` (async event streaming)
+- `services/agent-service/app/main.py` (ChatKit router inclusion)
+- `apps/web/nginx.conf` (SSE proxy configuration)
+- `apps/web/proxy.conf.json` (dev proxy for /chatkit)
+- `apps/web/src/app/chat/chat.component.ts` (mock mode toggle, ChatKit protocol parsing)
+- `apps/web/src/assets/chatkit-client.js` (standalone ChatKit protocol parsing)
+- `docker-compose.yml` (mock-worker service, MOCK_DOCKER configuration)
 
 ## Overall Progress
 

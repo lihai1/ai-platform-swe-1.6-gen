@@ -56,3 +56,9 @@ go.work
 *.tmp
 *.temp
 .cache/
+
+# Playwright test artifacts
+apps/web/playwright-report/
+apps/web/test-results/
+playwright-report/
+test-results/

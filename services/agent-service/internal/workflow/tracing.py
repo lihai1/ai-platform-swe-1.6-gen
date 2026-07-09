@@ -17,7 +17,7 @@ def get_langsmith_client() -> Client:
     return Client()
 
 
-def get_run_metadata(run_id: str, chatkit_thread_id: str = None, project_id: str = None, repository_id: str = None) -> dict:
+def get_chat_metadata(run_id: str, chatkit_thread_id: str = None, project_id: str = None, repository_id: str = None) -> dict:
     """Get metadata for LangSmith tracing"""
     
     metadata = {

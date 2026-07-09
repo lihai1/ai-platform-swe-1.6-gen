@@ -10,16 +10,18 @@ type ContainerOrchestrator interface {
 	StopContainer(containerID string) error
 	RemoveContainer(containerID string) error
 	GetContainerStatus(containerID string) (*ContainerStatus, error)
+	ExecInContainer(containerID string, command []string) error
 }
 
 // ContainerConfig holds configuration for creating a container
 type ContainerConfig struct {
-	ChatID        string
+	RunID         string
 	RepositoryURL string
 	Branch        string
 	Credentials   *RepositoryCredentials
 	Image         string
 	EnvVars       map[string]string
+	ContainerName string
 }
 
 // RepositoryCredentials holds credentials for repository access
@@ -45,17 +47,20 @@ type ContainerStatus struct {
 type OrchestratorType string
 
 const (
-	OrchestratorTypeDocker     OrchestratorType = "docker"
+	OrchestratorTypeDockerHTTP OrchestratorType = "docker-http"
+	OrchestratorTypeDockerBind OrchestratorType = "docker-bind"
 	OrchestratorTypeKubernetes OrchestratorType = "kubernetes"
 )
 
-// NewOrchestrator creates a new container orchestrator based on type
-func NewOrchestrator(orchestratorType OrchestratorType) (ContainerOrchestrator, error) {
+// NewOrchestrator creates a new container orchestrator based on type and configuration
+func NewOrchestrator(orchestratorType OrchestratorType, dockerSocketPath, kubeconfigPath, kubernetesNamespace string) (ContainerOrchestrator, error) {
 	switch orchestratorType {
-	case OrchestratorTypeDocker:
-		return NewDockerOrchestrator()
+	case OrchestratorTypeDockerHTTP:
+		return NewDockerHTTPOrchestrator()
+	case OrchestratorTypeDockerBind:
+		return NewDockerBindOrchestrator(dockerSocketPath)
 	case OrchestratorTypeKubernetes:
-		return NewKubernetesOrchestrator()
+		return NewKubernetesOrchestrator(kubeconfigPath, kubernetesNamespace)
 	default:
 		return nil, fmt.Errorf("unsupported orchestrator type: %s", orchestratorType)
 	}

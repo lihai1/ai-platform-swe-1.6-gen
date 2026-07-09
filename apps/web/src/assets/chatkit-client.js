@@ -130,9 +130,16 @@
           const data = await response.json();
           this.messages = data.items || [];
           this.renderMessages();
+        } else {
+          // If thread not found in ChatKit, start fresh
+          this.messages = [];
+          this.renderMessages();
         }
       } catch (error) {
         console.error('Failed to load thread:', error);
+        // On error, start fresh
+        this.messages = [];
+        this.renderMessages();
       }
     }
 
@@ -161,6 +168,7 @@
       this.renderMessages();
 
       try {
+        console.log('Sending message to:', `${this.apiUrl}/chatkit/`);
         const response = await fetch(`${this.apiUrl}/chatkit/`, {
           method: 'POST',
           headers: {
@@ -178,6 +186,9 @@
           })
         });
 
+        console.log('Response status:', response.status);
+        console.log('Response headers:', Object.fromEntries(response.headers.entries()));
+
         if (!response.ok) {
           throw new Error('Failed to send message');
         }
@@ -187,24 +198,63 @@
         const decoder = new TextDecoder();
         let assistantMessage = '';
 
+        console.log('Starting to read stream...');
+
         while (true) {
           const { done, value } = await reader.read();
-          if (done) break;
+          if (done) {
+            console.log('Stream reading completed');
+            break;
+          }
 
           const chunk = decoder.decode(value);
+          console.log('Received chunk:', chunk);
           const lines = chunk.split('\n');
 
           for (const line of lines) {
             if (line.startsWith('data: ')) {
               try {
                 const data = JSON.parse(line.slice(6));
-                if (data.content) {
+                console.log('Parsed SSE data:', data);
+                
+                // Handle ChatKit protocol events
+                if (data.type === 'progress_update') {
+                  console.log('Processing progress_update:', data.text);
+                  // Show progress updates in the UI
+                  const lastMessage = this.messages[this.messages.length - 1];
+                  if (lastMessage && lastMessage.role === 'assistant') {
+                    lastMessage.content = data.text || lastMessage.content;
+                  } else {
+                    this.messages.push({ role: 'assistant', content: data.text || '' });
+                  }
+                  this.renderMessages();
+                } else if (data.type === 'thread.item.done' && data.item) {
+                  console.log('Processing thread.item.done:', data.item);
+                  // Handle final assistant message
+                  const content = data.item.content || [];
+                  if (content.length > 0) {
+                    const text = content.map(c => c.text || '').join('');
+                    assistantMessage = text;
+                    if (data.item.thread_id) {
+                      this.threadId = data.item.thread_id;
+                    }
+                    
+                    const lastMessage = this.messages[this.messages.length - 1];
+                    if (lastMessage && lastMessage.role === 'assistant') {
+                      lastMessage.content = assistantMessage;
+                    } else {
+                      this.messages.push({ role: 'assistant', content: assistantMessage });
+                    }
+                    this.renderMessages();
+                  }
+                } else if (data.content) {
+                  console.log('Processing legacy format:', data.content);
+                  // Legacy format fallback
                   assistantMessage += data.content;
                   if (data.thread_id) {
                     this.threadId = data.thread_id;
                   }
                   
-                  // Update assistant message in real-time
                   const lastMessage = this.messages[this.messages.length - 1];
                   if (lastMessage && lastMessage.role === 'assistant') {
                     lastMessage.content = assistantMessage;
@@ -214,6 +264,7 @@
                   this.renderMessages();
                 }
               } catch (e) {
+                console.error('Error parsing SSE data:', e, 'Line:', line);
                 // Ignore parse errors for incomplete chunks
               }
             }

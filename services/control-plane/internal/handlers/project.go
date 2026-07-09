@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 
 	"github.com/agentic-engineering/control-plane/internal/service"
@@ -34,12 +35,16 @@ func (h *ProjectHandler) CreateProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("Failed to decode request body: %v", err)
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
+	log.Printf("Creating project: orgID=%s, name=%s, description=%s", req.OrganizationID, req.Name, req.Description)
+
 	project, err := h.projectService.CreateProject(req.OrganizationID, req.Name, req.Description)
 	if err != nil {
+		log.Printf("Failed to create project: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}

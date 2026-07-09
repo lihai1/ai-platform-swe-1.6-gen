@@ -1,0 +1,15 @@
+[project]
+name = "test-tools"
+version = "0.1.0"
+description = "Shared test tools for integration testing"
+requires-python = ">=3.12"
+dependencies = [
+    "nats-py>=2.7.0",
+    "asyncpg>=0.29.0",
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

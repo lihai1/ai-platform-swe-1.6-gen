@@ -1,13 +1,14 @@
 package orchestrator
 
 import (
+	"context"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 )
 
-// Manager manages container lifecycle for chats
+// Manager manages container lifecycle for runs
 type Manager struct {
 	orchestrator ContainerOrchestrator
 }
@@ -19,16 +20,18 @@ func NewManager(orchestrator ContainerOrchestrator) *Manager {
 	}
 }
 
-// CreateChatContainer creates a new container for a chat
-func (m *Manager) CreateChatContainer(chatID, repositoryURL, branch string, credentials *RepositoryCredentials, mockMode bool) (*ChatContainerInfo, error) {
+// CreateChatContainer creates a new container for a run
+func (m *Manager) CreateChatContainer(runID, repositoryURL, branch string, credentials *RepositoryCredentials, mockMode bool) (*ChatContainerInfo, error) {
+	containerName := fmt.Sprintf("automated-run-%s", runID)
 	config := ContainerConfig{
-		ChatID:        chatID,
+		RunID:         runID,
 		RepositoryURL: repositoryURL,
 		Branch:        branch,
 		Credentials:   credentials,
 		Image:         "agentic-orchestrator:latest",
+		ContainerName: containerName,
 		EnvVars: map[string]string{
-			"CHAT_ID":        chatID,
+			"RUN_ID":         runID,
 			"REPOSITORY_URL": repositoryURL,
 			"BRANCH":         branch,
 			"NATS_URL":       "nats://nats:4222",
@@ -52,8 +55,9 @@ func (m *Manager) CreateChatContainer(chatID, repositoryURL, branch string, cred
 
 	return &ChatContainerInfo{
 		ID:            uuid.New().String(),
-		ChatID:        chatID,
+		RunID:         runID,
 		ContainerID:   result.ContainerID,
+		ContainerName: containerName,
 		RepositoryURL: repositoryURL,
 		Branch:        branch,
 		Status:        result.Status,
@@ -91,11 +95,58 @@ func (m *Manager) GetChatContainerStatus(containerID string) (*ChatContainerStat
 	}, nil
 }
 
-// ChatContainerInfo holds information about a chat container
+// StartWorker starts a worker container for a run
+func (m *Manager) StartWorker(runID, repositoryURL, branch string, credentials *RepositoryCredentials, mockMode bool) (*ChatContainerInfo, error) {
+	return m.CreateChatContainer(runID, repositoryURL, branch, credentials, mockMode)
+}
+
+// StopWorker stops and removes a worker container for a run
+func (m *Manager) StopWorker(containerID string) error {
+	// Stop the container
+	if err := m.StopChatContainer(containerID); err != nil {
+		return fmt.Errorf("failed to stop worker container: %w", err)
+	}
+
+	// Remove the container
+	if err := m.RemoveChatContainer(containerID); err != nil {
+		return fmt.Errorf("failed to remove worker container: %w", err)
+	}
+
+	return nil
+}
+
+// TODO! consider to remove this function when worker ready signal is verified
+// WaitForContainerReady waits for a container to be ready (running)
+func (m *Manager) WaitForContainerReady(containerID string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for container to be ready")
+		case <-ticker.C:
+			status, err := m.GetChatContainerStatus(containerID)
+			if err != nil {
+				// Container might not exist yet, continue waiting
+				continue
+			}
+			if status.Running {
+				return nil
+			}
+		}
+	}
+}
+
+// ChatContainerInfo holds information about a run container
 type ChatContainerInfo struct {
 	ID            string
-	ChatID        string
+	RunID         string
 	ContainerID   string
+	ContainerName string
 	RepositoryURL string
 	Branch        string
 	Status        string

@@ -2,11 +2,10 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
 	"time"
@@ -31,6 +30,17 @@ func main() {
 	}
 	defer database.Close()
 
+	// Run migrations
+	log.Println("Running database migrations...")
+	migrateCmd := exec.Command("migrate", "-path", "./migrations", "-database", cfg.DatabaseURL, "up")
+	migrateCmd.Stdout = os.Stdout
+	migrateCmd.Stderr = os.Stderr
+	if err := migrateCmd.Run(); err != nil {
+		log.Printf("Migration failed (may already be applied): %v", err)
+	} else {
+		log.Println("Migrations completed successfully")
+	}
+
 	// Initialize repositories
 	userRepo := repository.NewUserRepository(database)
 	orgRepo := repository.NewOrganizationRepository(database)
@@ -39,11 +49,19 @@ func main() {
 	chatContainerRepo := repository.NewChatContainerRepository(database)
 
 	// Initialize orchestrator
-	containerOrchestrator, err := orchestrator.NewOrchestrator(orchestrator.OrchestratorTypeDocker)
+	containerOrchestrator, err := orchestrator.NewOrchestrator(
+		orchestrator.OrchestratorType(cfg.OrchestratorType),
+		cfg.DockerSocketPath,
+		cfg.KubeconfigPath,
+		cfg.KubernetesNamespace,
+	)
 	if err != nil {
 		log.Fatalf("Failed to create orchestrator: %v", err)
 	}
 	containerManager := orchestrator.NewManager(containerOrchestrator)
+
+	log.Printf("Initialized orchestrator: type=%s, docker_socket=%s, kubernetes_namespace=%s",
+		cfg.OrchestratorType, cfg.DockerSocketPath, cfg.KubernetesNamespace)
 
 	// Initialize services
 	authService := service.NewAuthService(cfg.JWTSecret, userRepo)
@@ -125,9 +143,15 @@ func main() {
 	}
 	defer nc.Close()
 
+	// Initialize JetStream context for durable messaging
+	js, err := nc.JetStream()
+	if err != nil {
+		log.Fatalf("Failed to initialize JetStream: %v", err)
+	}
+
 	// Subscribe to chat start messages
 	_, err = nc.Subscribe("chat.start", func(msg *nats.Msg) {
-		handleChatStart(msg, chatContainerService, nc)
+		handlers.HandleChatStart(msg, chatContainerService, containerManager, repoRepo, nc, js)
 	})
 	if err != nil {
 		log.Fatalf("Failed to subscribe to chat.start: %v", err)
@@ -135,7 +159,7 @@ func main() {
 
 	// Subscribe to chat close messages
 	_, err = nc.Subscribe("chat.close", func(msg *nats.Msg) {
-		handleChatClose(msg, chatContainerService)
+		handlers.HandleChatClose(msg, chatContainerService, containerManager)
 	})
 	if err != nil {
 		log.Fatalf("Failed to subscribe to chat.close: %v", err)
@@ -189,91 +213,4 @@ func main() {
 	}
 
 	log.Println("Server exited")
-}
-
-// ChatStartMessage represents a chat start message from NATS
-type ChatStartMessage struct {
-	MessageID     string `json:"message_id"`
-	ChatID        string `json:"chat_id"`
-	RepositoryID  string `json:"repository_id"`
-	ProjectID     string `json:"project_id"`
-	MockMode      bool   `json:"mock_mode"`
-	Timestamp     string `json:"timestamp"`
-	SchemaVersion string `json:"schema_version"`
-}
-
-// ChatCloseMessage represents a chat close message from NATS
-type ChatCloseMessage struct {
-	MessageID     string `json:"message_id"`
-	ChatID        string `json:"chat_id"`
-	Timestamp     string `json:"timestamp"`
-	SchemaVersion string `json:"schema_version"`
-}
-
-func handleChatStart(msg *nats.Msg, chatContainerService *service.ChatContainerService, nc *nats.Conn) {
-	var chatMsg ChatStartMessage
-	if err := json.Unmarshal(msg.Data, &chatMsg); err != nil {
-		log.Printf("[NATS RECEIVE] Failed to unmarshal chat start message: %v", err)
-		return
-	}
-
-	log.Printf("[NATS RECEIVE] Received chat start message on subject: %s", msg.Subject)
-	log.Printf("[NATS RECEIVE] Chat start payload: %s", string(msg.Data))
-	log.Printf("[NATS RECEIVE] Chat ID: %s, Repository ID: %s, Mock Mode: %v", chatMsg.ChatID, chatMsg.RepositoryID, chatMsg.MockMode)
-
-	// Create container for the chat
-	_, err := chatContainerService.CreateContainer(chatMsg.ChatID, chatMsg.RepositoryID, chatMsg.MockMode)
-	if err != nil {
-		log.Printf("[NATS RECEIVE] Failed to create container for chat %s: %v", chatMsg.ChatID, err)
-		return
-	}
-
-	log.Printf("[NATS RECEIVE] Successfully created container for chat %s", chatMsg.ChatID)
-
-	// Publish agent.chat.{chat_id}.start message to signal container is ready
-	agentStartMsg := map[string]interface{}{
-		"message_id":     chatMsg.MessageID,
-		"chat_id":        chatMsg.ChatID,
-		"repository_id":  chatMsg.RepositoryID,
-		"project_id":     chatMsg.ProjectID,
-		"mock_mode":      chatMsg.MockMode,
-		"timestamp":      chatMsg.Timestamp,
-		"schema_version": chatMsg.SchemaVersion,
-	}
-	agentStartData, _ := json.Marshal(agentStartMsg)
-	subject := fmt.Sprintf("agent.chat.%s.start", chatMsg.ChatID)
-
-	log.Printf("[NATS PUBLISH] Publishing agent start message to subject: %s", subject)
-	log.Printf("[NATS PUBLISH] Agent start payload: %s", string(agentStartData))
-
-	if err := nc.Publish(subject, agentStartData); err != nil {
-		log.Printf("[NATS PUBLISH] Failed to publish agent start message: %v", err)
-		return
-	}
-
-	log.Printf("[NATS PUBLISH] Successfully published agent start message for chat %s", chatMsg.ChatID)
-}
-
-func handleChatClose(msg *nats.Msg, chatContainerService *service.ChatContainerService) {
-	var chatMsg ChatCloseMessage
-	if err := json.Unmarshal(msg.Data, &chatMsg); err != nil {
-		log.Printf("[NATS RECEIVE] Failed to unmarshal chat close message: %v", err)
-		return
-	}
-
-	log.Printf("[NATS RECEIVE] Received chat close message on subject: %s", msg.Subject)
-	log.Printf("[NATS RECEIVE] Chat close payload: %s", string(msg.Data))
-	log.Printf("[NATS RECEIVE] Chat ID: %s", chatMsg.ChatID)
-
-	// Stop and remove container for the chat
-	if err := chatContainerService.StopContainer(chatMsg.ChatID); err != nil {
-		log.Printf("[NATS RECEIVE] Failed to stop container for chat %s: %v", chatMsg.ChatID, err)
-	}
-
-	if err := chatContainerService.RemoveContainer(chatMsg.ChatID); err != nil {
-		log.Printf("[NATS RECEIVE] Failed to remove container for chat %s: %v", chatMsg.ChatID, err)
-		return
-	}
-
-	log.Printf("[NATS RECEIVE] Successfully terminated container for chat %s", chatMsg.ChatID)
 }

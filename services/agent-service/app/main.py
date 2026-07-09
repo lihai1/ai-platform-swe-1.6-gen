@@ -1,32 +1,22 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from contextlib import asynccontextmanager
 from internal.config import settings
-from internal.db import connect, disconnect
+from internal.db import connect, disconnect, get_session
 from internal.chatkit import chatkit_router
 from internal.workflow.router import router as workflow_router
 from internal.messaging.nats import NATSMessaging
+from internal.workflow.event_streams import push_event
+from internal.handlers.nats import handle_agent_state_event, handle_worker_user_event
+from internal.chatkit.router import nats_client, get_nats_client
+from datetime import datetime, timezone
 import os
 import logging
+import asyncio
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Global NATS client
-nats_client: NATSMessaging = None
-
-async def handle_agent_state_event(event: dict) -> None:
-    """Handle agent state events to update chat records"""
-    chat_id = event.get("chat_id")
-    event_type = event.get("event_type")
-    payload = event.get("payload", {})
-    
-    logger.info(f"Received agent state event for chat {chat_id}: {event_type}")
-    
-    # TODO: Update chat state in database based on event
-    # This would update the chat record with the current state
-    # For now, just log the event
-    logger.info(f"Chat {chat_id} state: {event_type}, payload: {payload}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -48,13 +38,20 @@ async def lifespan(app: FastAPI):
         logger.info("NATS connection established")
         
         # Subscribe to all agent chat events for state updates
-        # Using subscribe_to_events to listen to agent.chat.> pattern
+        # Using subscribe_to_events to listen to agent.events.> pattern
         await nats_client.subscribe_to_events(
-            event_handler=handle_agent_state_event,
-            run_id=None  # Subscribe to all chats
+            event_handler=lambda event: handle_agent_state_event(event, push_event),
+            run_id=None  # Subscribe to all runs
         )
         
-        logger.info("Connected to NATS and subscribed to agent state events")
+        # Subscribe to worker user events for final answers and progress
+        # Using subscribe_plain to listen to agent.chat.{run_id}.user.events
+        await nats_client.subscribe_plain(
+            subject="agent.chat.>.user.events",
+            handler=lambda event: handle_worker_user_event(event, push_event)
+        )
+        
+        logger.info("Connected to NATS and subscribed to agent state events and worker user events")
     except Exception as e:
         logger.error(f"Failed to connect to NATS: {e}")
         import traceback

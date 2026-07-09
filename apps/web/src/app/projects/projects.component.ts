@@ -567,7 +567,7 @@ export class ProjectsComponent implements OnInit {
     try {
       const payload = {
         ...this.newProject,
-        organization_id: '5448f624-5af3-47b7-996a-36ce551d57ef' // TODO: Get from user context when available
+        organization_id: '' // backend creates default org when empty
       };
       const createdProject = await lastValueFrom(this.http.post<Project>('/projects', payload));
       

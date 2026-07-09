@@ -53,8 +53,6 @@ services:
       - "host.docker.internal:host-gateway"
     networks:
       - agentic-network
-    profiles:
-      - full
 
   agent-service:
     build:
@@ -95,13 +93,19 @@ services:
     networks:
       - agentic-network
 
-  orchestrator:
+  mock-worker:
     build:
       context: ./services/agent-service
-      dockerfile: Dockerfile.orchestrator
-    image: agentic-orchestrator:latest
+      dockerfile: Dockerfile
+    container_name: agentic-mock-worker
+    depends_on:
+      nats:
+        condition: service_started
+    environment:
+      NATS_URL: nats://nats:4222
     networks:
       - agentic-network
+    command: ["python", "mock_worker.py"]
 
 volumes:
   postgres_data:

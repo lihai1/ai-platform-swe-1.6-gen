@@ -40,8 +40,9 @@ type Repository struct {
 
 type ChatContainer struct {
 	ID            string     `json:"id"`
-	ChatID        string     `json:"chat_id"`
+	RunID         string     `json:"run_id"`
 	ContainerID   string     `json:"container_id"`
+	ContainerName string     `json:"container_name"`
 	RepositoryURL string     `json:"repository_url"`
 	Branch        string     `json:"branch"`
 	Status        string     `json:"status"`

@@ -47,6 +47,16 @@ func (r *OrganizationRepository) Create(org *models.Organization) (*models.Organ
 	return org, nil
 }
 
+func (r *OrganizationRepository) GetBySlug(slug string) (*models.Organization, error) {
+	org := &models.Organization{}
+	query := `SELECT id, name, slug, created_at, updated_at FROM app.organizations WHERE slug = $1`
+	err := r.db.QueryRow(query, slug).Scan(&org.ID, &org.Name, &org.Slug, &org.CreatedAt, &org.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return org, nil
+}
+
 func (r *OrganizationRepository) Get(id string) (*models.Organization, error) {
 	org := &models.Organization{}
 	query := `SELECT id, name, slug, created_at, updated_at FROM app.organizations WHERE id = $1`

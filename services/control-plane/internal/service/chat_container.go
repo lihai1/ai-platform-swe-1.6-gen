@@ -26,7 +26,7 @@ func NewChatContainerService(
 	}
 }
 
-func (s *ChatContainerService) CreateContainer(chatID, repositoryID string, mockMode bool) (*models.ChatContainer, error) {
+func (s *ChatContainerService) CreateContainer(runID, repositoryID string, mockMode bool) (*models.ChatContainer, error) {
 	// Get repository details
 	repo, err := s.repoRepo.Get(repositoryID)
 	if err != nil {
@@ -34,7 +34,7 @@ func (s *ChatContainerService) CreateContainer(chatID, repositoryID string, mock
 	}
 
 	// Create container via orchestrator
-	containerInfo, err := s.manager.CreateChatContainer(chatID, repo.GitURL, repo.Branch, nil, mockMode)
+	containerInfo, err := s.manager.CreateChatContainer(runID, repo.GitURL, repo.Branch, nil, mockMode)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create chat container: %w", err)
 	}
@@ -42,8 +42,9 @@ func (s *ChatContainerService) CreateContainer(chatID, repositoryID string, mock
 	// Save to database
 	container := &models.ChatContainer{
 		ID:            containerInfo.ID,
-		ChatID:        chatID,
+		RunID:         runID,
 		ContainerID:   containerInfo.ContainerID,
+		ContainerName: containerInfo.ContainerName,
 		RepositoryURL: containerInfo.RepositoryURL,
 		Branch:        containerInfo.Branch,
 		Status:        containerInfo.Status,
@@ -57,12 +58,12 @@ func (s *ChatContainerService) CreateContainer(chatID, repositoryID string, mock
 	return container, nil
 }
 
-func (s *ChatContainerService) GetContainer(chatID string) (*models.ChatContainer, error) {
-	return s.containerRepo.GetByChatID(chatID)
+func (s *ChatContainerService) GetContainer(runID string) (*models.ChatContainer, error) {
+	return s.containerRepo.GetByRunID(runID)
 }
 
-func (s *ChatContainerService) StopContainer(chatID string) error {
-	container, err := s.containerRepo.GetByChatID(chatID)
+func (s *ChatContainerService) StopContainer(runID string) error {
+	container, err := s.containerRepo.GetByRunID(runID)
 	if err != nil {
 		return fmt.Errorf("failed to get chat container: %w", err)
 	}
@@ -80,8 +81,8 @@ func (s *ChatContainerService) StopContainer(chatID string) error {
 	return nil
 }
 
-func (s *ChatContainerService) RemoveContainer(chatID string) error {
-	container, err := s.containerRepo.GetByChatID(chatID)
+func (s *ChatContainerService) RemoveContainer(runID string) error {
+	container, err := s.containerRepo.GetByRunID(runID)
 	if err != nil {
 		return fmt.Errorf("failed to get chat container: %w", err)
 	}

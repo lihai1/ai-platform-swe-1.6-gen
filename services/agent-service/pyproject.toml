@@ -35,9 +35,15 @@ dependencies = [
 dev = [
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",
+    "pytest-describe>=2.0.0",
     "ruff>=0.6.0",
     "mypy>=1.11.0",
 ]
+
+[project.scripts]
+dev-env = "docker-compose -f docker-compose-dev.yml up -d"
+dev-env-down = "docker-compose -f docker-compose-dev.yml down"
+test-integration = "pytest tests/integration/ -v"
 
 [build-system]
 requires = ["hatchling"]
@@ -53,3 +59,9 @@ target-version = "py312"
 [tool.mypy]
 python_version = "3.12"
 strict = true
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
+]
+asyncio_mode = "auto"

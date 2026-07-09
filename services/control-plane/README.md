@@ -8,8 +8,9 @@ Go control plane service for the agentic engineering platform. Manages users, or
 - **Organization & Project Management**: Multi-tenant resource organization
 - **Repository Management**: Git repository metadata and configuration
 - **Container Orchestration**: Docker container creation for agent workspaces
+- **Docker Bind Orchestrator**: Direct Docker socket/HTTP container lifecycle management
 - **NATS Integration**: Message-based communication with agent service
-- **Mock Docker Mode**: Simulated container creation for testing
+- **Mock Docker Mode**: Simulated container creation for testing (set `MOCK_DOCKER=true`)
 
 ## Quick Start
 
@@ -75,15 +76,20 @@ docker-compose --profile full up -d control-plane
 
 The control plane subscribes to NATS subjects for container orchestration:
 
-- **chat.start**: Triggers container creation for a chat session
-- **chat.close**: Triggers container termination for a chat session
+- **chat.start**: Triggers container creation for a run session
+- **chat.close**: Triggers container termination for a run session
 
 ### Message Flow
 
-1. Agent Service publishes `chat.start` message with chat_id and repository_id
+1. Agent Service publishes `chat.start` message with run_id and repository_id
 2. Control Plane receives message and creates Docker container
-3. Control Plane publishes `agent.chat.{chat_id}.start` to signal readiness
-4. Agent worker receives signal and begins workflow execution
+3. If `MOCK_DOCKER=true`, the container creation is simulated and the flow continues immediately
+4. Control Plane publishes `agent.chat.{run_id}.worker.ready` to signal readiness
+5. Agent worker receives signal and begins workflow execution
+
+### Mock Mode
+
+Set `MOCK_DOCKER=true` to bypass real Docker container creation. This is used for the first-flow E2E test with the `mock-worker` container, where the worker itself simulates the agent execution.
 
 ## Configuration
 
@@ -98,10 +104,33 @@ Environment variables:
 
 ## Testing
 
-Run tests with ginkgo:
+Run unit tests with ginkgo:
 ```bash
 make test
 ```
+
+### Integration Tests
+
+Start development environment (PostgreSQL + NATS):
+```bash
+make dev-env
+```
+
+Stop development environment:
+```bash
+make dev-env-down
+```
+
+Run integration tests:
+```bash
+make test-integration
+```
+
+Integration tests require PostgreSQL and NATS to be running locally. The tests verify:
+- NATS subscription to `chat.start` and `chat.close` messages
+- Container lifecycle via NATS agent start messages
+- Orchestrator command reception and container creation
+- Worker ready signal handling
 
 ### Linting
 

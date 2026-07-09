@@ -17,7 +17,7 @@ func NewChatContainerHandler(containerService *service.ChatContainerService) *Ch
 }
 
 type CreateContainerRequest struct {
-	ChatID       string `json:"chat_id"`
+	RunID        string `json:"run_id"`
 	RepositoryID string `json:"repository_id"`
 	MockMode     bool   `json:"mock_mode"`
 }
@@ -29,7 +29,7 @@ func (h *ChatContainerHandler) CreateContainer(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	container, err := h.containerService.CreateContainer(req.ChatID, req.RepositoryID, req.MockMode)
+	container, err := h.containerService.CreateContainer(req.RunID, req.RepositoryID, req.MockMode)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -40,13 +40,13 @@ func (h *ChatContainerHandler) CreateContainer(w http.ResponseWriter, r *http.Re
 }
 
 func (h *ChatContainerHandler) GetContainer(w http.ResponseWriter, r *http.Request) {
-	chatID := mux.Vars(r)["chat_id"]
-	if chatID == "" {
-		http.Error(w, "chat_id is required", http.StatusBadRequest)
+	runID := mux.Vars(r)["run_id"]
+	if runID == "" {
+		http.Error(w, "run_id is required", http.StatusBadRequest)
 		return
 	}
 
-	container, err := h.containerService.GetContainer(chatID)
+	container, err := h.containerService.GetContainer(runID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -57,13 +57,13 @@ func (h *ChatContainerHandler) GetContainer(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *ChatContainerHandler) StopContainer(w http.ResponseWriter, r *http.Request) {
-	chatID := mux.Vars(r)["chat_id"]
-	if chatID == "" {
-		http.Error(w, "chat_id is required", http.StatusBadRequest)
+	runID := mux.Vars(r)["run_id"]
+	if runID == "" {
+		http.Error(w, "run_id is required", http.StatusBadRequest)
 		return
 	}
 
-	if err := h.containerService.StopContainer(chatID); err != nil {
+	if err := h.containerService.StopContainer(runID); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -72,13 +72,13 @@ func (h *ChatContainerHandler) StopContainer(w http.ResponseWriter, r *http.Requ
 }
 
 func (h *ChatContainerHandler) RemoveContainer(w http.ResponseWriter, r *http.Request) {
-	chatID := mux.Vars(r)["chat_id"]
-	if chatID == "" {
-		http.Error(w, "chat_id is required", http.StatusBadRequest)
+	runID := mux.Vars(r)["run_id"]
+	if runID == "" {
+		http.Error(w, "run_id is required", http.StatusBadRequest)
 		return
 	}
 
-	if err := h.containerService.RemoveContainer(chatID); err != nil {
+	if err := h.containerService.RemoveContainer(runID); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

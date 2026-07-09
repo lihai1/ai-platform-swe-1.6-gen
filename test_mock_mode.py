@@ -5,7 +5,7 @@ import sys
 import os
 
 # Add the agent service to the path
-sys.path.insert(0, '/Users/akwa/dev-agents/swe-1.6-gen/services/agent-service')
+sys.path.insert(0, '/Users/akwa/dev-agents/ai-platform-swe-1.6-gen/services/agent-service')
 
 from internal.workflow.nodes import (
     scouting_node,
@@ -22,7 +22,7 @@ async def test_mock_mode():
     
     # Test state with mock mode enabled
     state = {
-        "run_id": "test-run-1",
+        "chat_id": "test-chat-1",
         "user_id": "test-user",
         "task": "Add a new feature",
         "status": "CREATED",
@@ -81,7 +81,7 @@ async def test_normal_mode():
     
     # Test state with mock mode disabled
     state = {
-        "run_id": "test-run-2",
+        "chat_id": "test-chat-2",
         "user_id": "test-user",
         "task": "Add a new feature",
         "status": "CREATED",

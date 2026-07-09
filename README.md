@@ -21,6 +21,8 @@ The implementation showcases SWE-1.6's ability to reason about complex distribut
   - See [services/control-plane/README.md](services/control-plane/README.md) for details
 - **Agent Service**: Python FastAPI service with ChatKit integration and LangGraph workflows
   - See [services/agent-service/README.md](services/agent-service/README.md) for details
+- **Agent Worker**: Python worker for isolated LangGraph workflow execution
+  - See [services/agent-worker/README.md](services/agent-worker/README.md) for details
 - **Web UI**: Angular 22+ application with standalone components
 
 ## Quick Start
@@ -43,6 +45,8 @@ This will start:
 - Control Plane API on port 8080
 - Agent Service on port 8000
 - Web UI on port 4200
+- NATS on port 4222
+- Mock Agent Worker (for first-flow E2E testing)
 
 ### Local Development
 
@@ -141,7 +145,12 @@ ai-platform-swe-1.6-gen/
 │       │   │   ├── implementers.py # Implementation agents
 │       │   │   └── validators.py  # Validation agents
 │       │   ├── chatkit/           # ChatKit integration
-│       │   │   └── router.py      # Chat endpoints
+│       │   │   ├── router.py      # Chat endpoints
+│       │   │   ├── server.py      # AegisChatKitServer (SSE streaming)
+│       │   │   ├── nats_bridge.py # NATS event subscription bridge
+│       │   │   ├── event_mapper.py # Event mapping to ChatKit protocol
+│       │   │   ├── context.py     # Request context helpers
+│       │   │   └── store.py       # PostgreSQL thread/message store
 │       │   ├── config.py          # Configuration
 │       │   ├── db.py              # Database connection
 │       │   ├── messaging/         # NATS messaging
@@ -175,6 +184,12 @@ ai-platform-swe-1.6-gen/
 │       ├── pyproject.toml
 │       ├── alembic.ini
 │       └── Dockerfile
+│   └── agent-worker/        # Python worker for isolated workflow execution
+│       ├── app/             # Worker application
+│       ├── internal/        # Worker internals
+│       ├── tests/           # Worker tests
+│       ├── Dockerfile.worker
+│       └── Makefile
 ├── deploy/                  # Deployment configurations
 │   ├── docker-compose.yml   # Docker Compose orchestration
 │   └── kubernetes/          # Kubernetes manifests (future)
@@ -207,20 +222,30 @@ See [PROGRESS.md](PROGRESS.md) for detailed implementation status.
 
 ## Agent Container Creation Flow
 
-The platform now supports complete end-to-end agent container creation:
+The platform now supports complete end-to-end agent container creation. The **first-flow** implementation uses the `mock-worker` container to validate the full message path without requiring real LLM calls or Docker container creation:
 
-1. **User Chat Message** → Agent Service receives chat request
-2. **Container Creation** → Agent Service publishes `chat.start` to NATS
-3. **Control Plane** → Receives `chat.start`, creates container (mock mode)
-4. **Agent Start Signal** → Control Plane publishes `agent.chat.{chat_id}.start`
-5. **Worker Execution** → Agent worker receives command, executes LangGraph workflow
-6. **State Events** → Worker publishes real-time progress (implementing → testing → reviewing)
+1. **User Chat Message** → Agent Service receives chat request via `POST /chatkit/`
+2. **SSE Stream Initiated** → `AegisChatKitServer.respond()` returns an SSE stream
+3. **Container Creation** → Agent Service publishes `chat.start` to NATS
+4. **Control Plane** → Receives `chat.start`, attempts container creation (or skips in mock mode)
+5. **Mock Agent Worker** → Container `mock-worker` subscribes to `agent.events.{run_id}.>` and publishes `started`, `progress`, and `completed` events
+6. **State Events** → Agent Service receives events via `NatsBridge` and yields them as ChatKit `progress_update` and `thread.item.done` SSE events
+7. **UI Rendering** → Angular `chat.component.ts` parses SSE events and updates the chat UI
+
+### First-Flow with mock-worker
+
+For the initial E2E smoke test, the `mock-worker` container simulates a real agent worker:
+
+- Listens on the `chat.start` NATS subject
+- Publishes a deterministic sequence of events (`started`, `progress`, `completed`)
+- Allows the ChatKit streaming path to be verified without requiring GPU/LLM access or real Docker containers
 
 ### Current Limitations
 
 - **Memory Checkpointer**: Using in-memory checkpointer instead of PostgreSQL (temporary workaround for LangGraph API issues)
-- **Mock Docker Mode**: Container creation is simulated (no actual Docker containers)
-- **Mock Responses**: Agent service returns predefined responses (no actual LLM calls)
+- **Mock Docker Mode**: Container creation is simulated when `MOCK_DOCKER=true` (no actual Docker containers)
+- **Mock Responses**: The `mock-worker` returns predefined responses (no actual LLM calls)
+- **Icon Validation**: Fixed invalid `loader` icon literal by mapping it to `agent`
 
 These limitations are acceptable for testing the message flow and can be addressed in future iterations.
 

@@ -1,4 +1,4 @@
-.PHONY: build run test migrate-up migrate-down lint fmt clean dev
+.PHONY: build run test migrate-up migrate-down lint fmt clean dev dev-env dev-env-down test-integration
 
 # Variables
 BINARY_NAME=control-plane
@@ -13,7 +13,7 @@ run:
 	go run ./cmd/server
 
 test:
-	ginkgo -r ./...
+	go test -v ./...
 
 migrate-up:
 	migrate -path $(MIGRATION_DIR) -database "$(DATABASE_URL)" up
@@ -34,3 +34,15 @@ dev: migrate-up
 	docker-compose up -d postgres
 	@sleep 3
 	$(MAKE) run
+
+dev-env:
+	docker-compose -f docker-compose-dev.yml up -d
+	@echo "Waiting for services to be healthy..."
+	@sleep 5
+	@docker-compose -f docker-compose-dev.yml ps
+
+dev-env-down:
+	docker-compose -f docker-compose-dev.yml down
+
+test-integration:
+	go test -v ./tests/integration/...

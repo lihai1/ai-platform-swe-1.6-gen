@@ -5,6 +5,9 @@ Python FastAPI service for the agentic engineering platform. Handles chat intera
 ## Features
 
 - **ChatKit Integration**: Custom ChatKit server with SSE streaming
+- **AegisChatKitServer**: Async SSE streaming response for chat messages
+- **NATS Bridge**: Subscribes to `agent.events.{run_id}.>` and yields ChatKit events
+- **Mock Worker**: `mock_worker.py` for first-flow E2E testing without real LLMs
 - **LangGraph Workflows**: State machine-based agent execution
 - **Specialist Agents**: Skills-based agent system with structured outputs
 - **Workspace Isolation**: Docker-based isolated execution environments
@@ -50,11 +53,21 @@ Start agent service only:
 docker-compose up -d agent-service
 ```
 
+Start with the mock worker for first-flow E2E testing:
+```bash
+docker-compose up -d agent-service mock-worker
+```
+
 ### Worker Process
 
-Run the agent worker for a specific chat:
+Run the agent worker for a specific run:
 ```bash
-uv run python -m app.worker --chat-id <chat_id> --nats-url nats://localhost:4222
+uv run python -m app.worker --run-id <run_id> --nats-url nats://localhost:4222
+```
+
+Run the mock worker for first-flow E2E testing:
+```bash
+uv run python mock_worker.py
 ```
 
 ## API Endpoints
@@ -88,17 +101,27 @@ The agent service uses NATS JetStream for reliable message delivery:
 ### Subjects
 - **chat.start**: Publishes container creation requests
 - **chat.close**: Publishes container termination requests
-- **agent.chat.{chat_id}.run.start**: Triggers workflow execution
-- **agent.chat.{chat_id}.run.cancel**: Cancels workflow execution
-- **agent.chat.{chat_id}.run.resume**: Resumes paused workflow
-- **agent.chat.{chat_id}.{event_type}**: Publishes state events
+- **agent.chat.{run_id}.user.events**: Publishes run.start commands to worker
+- **agent.events.{run_id}.>**: Subscribes to all state events for a run
+- **agent.events.{run_id}.{event_type}**: Publishes state events
 
 ### Message Flow
 
-1. **Container Creation**: Agent Service → NATS (`chat.start`) → Control Plane
-2. **Agent Start**: Control Plane → NATS (`agent.chat.{chat_id}.start`) → Worker
-3. **Workflow Execution**: Worker processes commands and executes LangGraph
-4. **State Events**: Worker → NATS (`agent.chat.{chat_id}.{event_type}`) → Agent Service
+1. **Chat Request**: UI → Agent Service (`POST /api/chatkit/`)
+2. **SSE Stream**: `AegisChatKitServer.respond()` yields `progress_update` and `thread.item.done` events
+3. **Container Creation**: Agent Service → NATS (`chat.start`) → Control Plane
+4. **Agent Start**: Agent Service → NATS (`agent.chat.{run_id}.user.events` with `run.start`) → Worker
+5. **Workflow Execution**: Worker processes `run.start` command and executes LangGraph
+6. **State Events**: Worker → NATS (`agent.events.{run_id}.{event_type}`) → Agent Service
+
+### First-Flow with mock-worker
+
+For the E2E smoke test, the `mock-worker` container is used instead of a real agent worker:
+
+1. Agent Service publishes `chat.start`
+2. `mock-worker` receives the chat start and publishes `started`, `progress`, and `completed` events
+3. Agent Service `NatsBridge` receives the events and maps them to ChatKit protocol events
+4. SSE stream returns the events to the UI
 
 ## Configuration
 
@@ -166,7 +189,7 @@ The system includes the following specialist agents:
 
 ## Testing
 
-Run tests with pytest:
+Run unit tests with pytest:
 ```bash
 uv run pytest
 ```
@@ -176,6 +199,28 @@ Run specific test suites:
 uv run pytest tests/e2e/
 uv run pytest tests/security/
 ```
+
+### Integration Tests
+
+Start development environment (PostgreSQL + NATS):
+```bash
+uv run dev-env
+```
+
+Stop development environment:
+```bash
+uv run dev-env-down
+```
+
+Run integration tests:
+```bash
+uv run test-integration
+```
+
+Integration tests require PostgreSQL and NATS to be running locally. The tests verify:
+- NATS publishing to `chat.start`, `chat.close`, and `run.start` subjects
+- Event handling from NATS state events
+- Full chat lifecycle via HTTP + NATS messaging
 
 ## Implementation Status
 

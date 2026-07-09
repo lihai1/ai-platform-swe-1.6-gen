@@ -4,7 +4,7 @@ import { FormsModule } from '@angular/forms';
 
 interface ApprovalRequest {
   id: string;
-  run_id: string;
+  chat_id: string;
   action_type: string;
   description: string;
   tool_name: string;

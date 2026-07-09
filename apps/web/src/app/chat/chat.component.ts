@@ -1,4 +1,4 @@
-import { Component, OnDestroy, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit, NgZone, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute } from '@angular/router';
@@ -73,7 +73,7 @@ interface ChatMessage {
         </div>
         
         <div class="activity-sidebar" *ngIf="showActivityPanel && currentRunId">
-          <app-activity [runId]="currentRunId"></app-activity>
+          <app-activity [chatId]="currentRunId"></app-activity>
         </div>
       </div>
       
@@ -293,7 +293,9 @@ export class ChatComponent implements OnInit, OnDestroy {
   
   constructor(
     private route: ActivatedRoute,
-    private http: HttpClient
+    private http: HttpClient,
+    private ngZone: NgZone,
+    private cdr: ChangeDetectorRef
   ) {
     this.route.queryParams.subscribe(params => {
       this.projectId = params['project_id'] || null;
@@ -334,7 +336,7 @@ export class ChatComponent implements OnInit, OnDestroy {
     
     try {
       const token = localStorage.getItem('jwt_token');
-      const response = await fetch('http://localhost:8000/api/chatkit/', {
+      const response = await fetch('/chatkit/', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -360,6 +362,7 @@ export class ChatComponent implements OnInit, OnDestroy {
       const reader = response.body!.getReader();
       const decoder = new TextDecoder();
       let assistantMessage = '';
+      let workflowTriggered = false;
       
       // Add empty assistant message that will be updated
       this.messages.push({ role: 'assistant', content: '' });
@@ -375,23 +378,69 @@ export class ChatComponent implements OnInit, OnDestroy {
           if (line.startsWith('data: ')) {
             try {
               const data = JSON.parse(line.slice(6));
-              if (data.content) {
+              console.log('Angular SSE data:', data);
+              
+              // Handle ChatKit protocol events
+              if (data.type === 'progress_update') {
+                console.log('Angular progress_update:', data.text);
+                // Update with progress text
+                this.ngZone.run(() => {
+                  const lastMessage = this.messages[this.messages.length - 1];
+                  if (lastMessage && lastMessage.role === 'assistant') {
+                    this.messages[this.messages.length - 1] = { role: 'assistant', content: data.text || lastMessage.content };
+                    this.cdr.detectChanges();
+                  }
+                });
+              } else if (data.type === 'thread.item.done' && data.item) {
+                console.log('Angular thread.item.done:', data.item);
+                // Handle final assistant message
+                const content = data.item.content || [];
+                if (content.length > 0) {
+                  const text = content.map((c: any) => c.text || '').join('');
+                  assistantMessage = text;
+                  if (data.item.thread_id) {
+                    this.threadId = data.item.thread_id;
+                  }
+                  
+                  this.ngZone.run(() => {
+                    const lastMessage = this.messages[this.messages.length - 1];
+                    if (lastMessage && lastMessage.role === 'assistant') {
+                      this.messages[this.messages.length - 1] = { role: 'assistant', content: assistantMessage };
+                      this.cdr.detectChanges();
+                    }
+                  });
+                }
+              } else if (data.content) {
+                console.log('Angular legacy format:', data.content);
+                // Legacy format fallback
                 assistantMessage += data.content;
                 if (data.thread_id) {
                   this.threadId = data.thread_id;
                 }
-                
-                // Update last message (assistant)
-                const lastMessage = this.messages[this.messages.length - 1];
-                if (lastMessage && lastMessage.role === 'assistant') {
-                  lastMessage.content = assistantMessage;
+                if (data.workflow_triggered) {
+                  workflowTriggered = true;
                 }
+                
+                // Update last message (assistant) - run in Angular zone and force change detection
+                this.ngZone.run(() => {
+                  const lastMessage = this.messages[this.messages.length - 1];
+                  if (lastMessage && lastMessage.role === 'assistant') {
+                    this.messages[this.messages.length - 1] = { role: 'assistant', content: assistantMessage };
+                    this.cdr.detectChanges();
+                  }
+                });
               }
             } catch (e) {
+              console.error('Angular SSE parse error:', e);
               // Ignore parse errors for incomplete chunks
             }
           }
         }
+      }
+      
+      // Start event stream if workflow was triggered
+      if (workflowTriggered && this.threadId) {
+        this.handleRunStarted(this.threadId);
       }
       
     } catch (error) {

@@ -18,28 +18,29 @@ func NewChatContainerRepository(db *sql.DB) *ChatContainerRepository {
 
 func (r *ChatContainerRepository) Create(container *models.ChatContainer) error {
 	query := `
-		INSERT INTO app.chat_containers (id, chat_id, container_id, repository_url, branch, status, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO app.chat_containers (id, run_id, container_id, container_name, repository_url, branch, status, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`
-	_, err := r.db.Exec(query, container.ID, container.ChatID, container.ContainerID, container.RepositoryURL, container.Branch, container.Status, container.CreatedAt)
+	_, err := r.db.Exec(query, container.ID, container.RunID, container.ContainerID, container.ContainerName, container.RepositoryURL, container.Branch, container.Status, container.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("failed to create chat container: %w", err)
 	}
 	return nil
 }
 
-func (r *ChatContainerRepository) GetByChatID(chatID string) (*models.ChatContainer, error) {
+func (r *ChatContainerRepository) GetByRunID(runID string) (*models.ChatContainer, error) {
 	query := `
-		SELECT id, chat_id, container_id, repository_url, branch, status, created_at, stopped_at
+		SELECT id, run_id, container_id, container_name, repository_url, branch, status, created_at, stopped_at
 		FROM app.chat_containers
-		WHERE chat_id = $1
+		WHERE run_id = $1
 	`
 	var container models.ChatContainer
 	var stoppedAt sql.NullTime
-	err := r.db.QueryRow(query, chatID).Scan(
+	err := r.db.QueryRow(query, runID).Scan(
 		&container.ID,
-		&container.ChatID,
+		&container.RunID,
 		&container.ContainerID,
+		&container.ContainerName,
 		&container.RepositoryURL,
 		&container.Branch,
 		&container.Status,
@@ -96,7 +97,7 @@ func (r *ChatContainerRepository) Delete(id string) error {
 
 func (r *ChatContainerRepository) List() ([]*models.ChatContainer, error) {
 	query := `
-		SELECT id, chat_id, container_id, repository_url, branch, status, created_at, stopped_at
+		SELECT id, run_id, container_id, container_name, repository_url, branch, status, created_at, stopped_at
 		FROM app.chat_containers
 		ORDER BY created_at DESC
 	`
@@ -112,8 +113,9 @@ func (r *ChatContainerRepository) List() ([]*models.ChatContainer, error) {
 		var stoppedAt sql.NullTime
 		err := rows.Scan(
 			&container.ID,
-			&container.ChatID,
+			&container.RunID,
 			&container.ContainerID,
+			&container.ContainerName,
 			&container.RepositoryURL,
 			&container.Branch,
 			&container.Status,
