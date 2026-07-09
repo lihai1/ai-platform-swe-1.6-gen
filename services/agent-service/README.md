@@ -168,7 +168,14 @@ The LangGraph workflow implements the following phases:
 
 ## Specialist Agents
 
-The system includes the following specialist agents:
+> **Note:** The specialist agents and the LangGraph workflow are **executed by
+> `services/agent-worker`**, not by this service. The agent-service is the
+> API/streaming gateway: it exposes the ChatKit endpoint, bridges NATS events to
+> the browser over SSE, and hosts the workflow REST API. Shared infrastructure
+> (`config`, `db`, `models`, `messaging`) is provided by the `agent_core`
+> package in `shared/agent-core`.
+
+The platform includes the following specialist agents (implemented in the worker):
 
 ### Planning Agents
 - **skills-lead**: Selects appropriate specialists based on task

@@ -7,16 +7,16 @@ sequenceDiagram
     Note over API,NATS: Command Publishing
     API->>NATS: Connect to NATS
     NATS-->>API: Connected
-    API->>NATS: Create stream AGENT_COMMANDS<br/>(subjects: agent.commands.>)
+    API->>NATS: Create stream AGENT_COMMANDS<br/>(subjects: agent.chat.>)
     NATS-->>API: Stream created
 
-    API->>NATS: Publish command<br/>subject: agent.commands.run.start<br/>payload: {run_id, task, ...}<br/>headers: {message_id, run_id}
+    API->>NATS: Publish command<br/>subject: agent.chat.{run_id}.user.events<br/>payload: {command_type: run.start, run_id, task, ...}<br/>headers: {message_id, run_id}
     NATS-->>API: ACK (message persisted)
 
     Note over NATS,Worker: Command Consumption
     Worker->>NATS: Connect to NATS
     NATS-->>Worker: Connected
-    Worker->>NATS: Subscribe to agent.commands.><br/>queue: agent-workers<br/>durable: agent-workers-consumer
+    Worker->>NATS: Subscribe to agent.chat.{run_id}.user.events<br/>durable: agent-workers-{run_id}-consumer
     NATS-->>Worker: Subscribed
 
     NATS->>Worker: Deliver message
@@ -43,12 +43,12 @@ sequenceDiagram
     NATS-->>Worker: Stream created
 
     loop For each workflow event
-        Worker->>NATS: Publish event<br/>subject: agent.events.{run_id}<br/>payload: {event_type, data, ...}<br/>headers: {message_id, run_id}
+        Worker->>NATS: Publish event<br/>subject: agent.events.{run_id}.{event_type}<br/>payload: {event_type, run_id, payload, ...}<br/>headers: {message_id, run_id}
         NATS-->>Worker: ACK (event persisted)
     end
 
     Note over NATS,API: Event Consumption
-    API->>NATS: Subscribe to agent.events.{run_id}
+    API->>NATS: Subscribe to agent.events.{run_id}.>
     NATS->>API: Deliver event
     API->>PostgreSQL: Store event
     API->>NATS: ACK

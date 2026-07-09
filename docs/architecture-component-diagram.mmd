@@ -12,8 +12,12 @@ graph TB
         AgentWorker[Python Agent Worker<br/>LangGraph Execution]
     end
 
+    subgraph "Shared Library"
+        AgentCore[shared/agent-core<br/>config · db · models · messaging]
+    end
+
     subgraph "Messaging Layer"
-        NATS[NATS JetStream<br/>Command & Event Streams]
+        NATS[NATS JetStream<br/>AGENT_COMMANDS: agent.chat.&gt;<br/>AGENT_EVENTS: agent.events.&gt;]
     end
 
     subgraph "Data Layer"
@@ -37,10 +41,15 @@ graph TB
     WebUI -->|SSE Events| AgentAPI
 
     %% API to Worker via NATS
-    AgentAPI -->|Publish Commands| NATS
-    AgentWorker -->|Subscribe Commands| NATS
-    AgentWorker -->|Publish Events| NATS
-    AgentAPI -->|Subscribe Events| NATS
+    AgentAPI -->|"Publish chat.start / agent.chat.{run}.user.events"| NATS
+    AgentWorker -->|"Subscribe agent.chat.{run}.user.events"| NATS
+    AgentWorker -->|"Publish agent.events.{run}.{type}"| NATS
+    AgentAPI -->|"Subscribe agent.events.{run}.&gt;"| NATS
+    ControlPlane -->|"Subscribe chat.start / chat.close"| NATS
+
+    %% Shared library usage
+    AgentAPI -.->|imports| AgentCore
+    AgentWorker -.->|imports| AgentCore
 
     %% Database connections
     ControlPlane -->|SQL| PostgreSQL
@@ -66,10 +75,12 @@ graph TB
     classDef data fill:#fce4ec,stroke:#880e4f,stroke-width:2px
     classDef execution fill:#fff9c4,stroke:#f57f17,stroke-width:2px
     classDef external fill:#cfd8dc,stroke:#455a64,stroke-width:2px
+    classDef shared fill:#ede7f6,stroke:#311b92,stroke-width:2px
 
     class WebUI client
     class ControlPlane,AgentAPI api
     class AgentWorker worker
+    class AgentCore shared
     class NATS messaging
     class PostgreSQL,LangSmith data
     class DockerWorkspaces execution

@@ -8,6 +8,9 @@ from internal.messaging.nats import NATSMessaging
 import json
 import asyncio
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Global NATS client for event publishing
 _nats_client: Optional[NATSMessaging] = None
@@ -35,7 +38,7 @@ async def event_generator(
     while True:
         # Query for new events
         query = select(AgentEvent).where(
-            AgentEvent.run_id == run_id,
+            AgentEvent.chat_id == run_id,
             AgentEvent.sequence_number >= start_sequence
         ).order_by(AgentEvent.sequence_number)
         
@@ -47,7 +50,7 @@ async def event_generator(
                 "id": event.sequence_number,
                 "event": event.event_type,
                 "data": json.dumps({
-                    "run_id": event.run_id,
+                    "run_id": event.chat_id,
                     "step_id": event.step_id,
                     "event_type": event.event_type,
                     "event_data": event.event_data,
@@ -94,7 +97,7 @@ async def stream_events(
             pass
     
     return EventSourceResponse(
-        event_generator(run_id, last_event_id, session),
+        event_generator(run_id, session, last_event_id),
         media_type="text/event-stream"
     )
 
@@ -109,7 +112,7 @@ async def publish_event(
     """Publish an event to the database and NATS"""
 
     # Get the next sequence number for this run
-    query = select(AgentEvent).where(AgentEvent.run_id == run_id).order_by(
+    query = select(AgentEvent).where(AgentEvent.chat_id == run_id).order_by(
         AgentEvent.sequence_number.desc()
     )
     result = await session.execute(query)
@@ -118,7 +121,7 @@ async def publish_event(
     next_sequence = (last_event.sequence_number + 1) if last_event else 0
 
     event = AgentEvent(
-        run_id=run_id,
+        chat_id=run_id,
         step_id=step_id,
         event_type=event_type,
         event_data=event_data,
@@ -135,7 +138,6 @@ async def publish_event(
         await nats.publish_event(
             event_type=event_type,
             run_id=run_id,
-            chat_id=run_id,  # chat_id = run_id
             payload={
                 "event_type": event_type,
                 "run_id": run_id,
@@ -146,6 +148,6 @@ async def publish_event(
         )
     except Exception as e:
         # Log but don't fail if NATS publishing fails
-        print(f"Failed to publish event to NATS: {e}")
+        logger.warning("Failed to publish event to NATS: %s", e)
 
     return event

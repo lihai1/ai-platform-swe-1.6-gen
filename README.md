@@ -17,13 +17,25 @@ The implementation showcases SWE-1.6's ability to reason about complex distribut
 
 ## Architecture
 
-- **Control Plane**: Go service managing users, organizations, projects, and repositories
+- **Control Plane**: Go service managing users, organizations, projects, and repositories. Subscribes to NATS `chat.start`/`chat.close` to create/destroy agent worker containers.
   - See [services/control-plane/README.md](services/control-plane/README.md) for details
-- **Agent Service**: Python FastAPI service with ChatKit integration and LangGraph workflows
+- **Agent Service**: Python FastAPI service with ChatKit integration, SSE streaming, and the workflow REST API. This is the API/streaming **gateway** — it bridges NATS events to the browser and persists chat threads.
   - See [services/agent-service/README.md](services/agent-service/README.md) for details
-- **Agent Worker**: Python worker for isolated LangGraph workflow execution
+- **Agent Worker**: Python worker that **executes** the LangGraph workflow. It owns the specialist agents, skills, tools, and workflow graph/nodes.
   - See [services/agent-worker/README.md](services/agent-worker/README.md) for details
 - **Web UI**: Angular 22+ application with standalone components
+- **Shared Core** (`shared/agent-core`): the single source of truth for configuration, database engine/session, ORM models, and the NATS messaging client. Both Python services import it as the `agent_core` package; each service's `internal/{config,db,models,messaging}` module is a thin re-export shim.
+
+### Service responsibilities at a glance
+
+| Concern | agent-service (gateway) | agent-worker (executor) |
+| --- | --- | --- |
+| ChatKit endpoint + SSE streaming | ✅ | — |
+| Workflow REST API (`/runs`, approvals) | ✅ | ✅ |
+| LangGraph graph/nodes execution | — (mock nodes only) | ✅ (real execution) |
+| Specialist agents / skills / tools | — | ✅ |
+| NATS bridge to browser | ✅ | — |
+| Publishes `agent.events.{run_id}.*` | — | ✅ |
 
 ## Quick Start
 
@@ -62,9 +74,15 @@ make dev
 ```bash
 cd services/agent-service
 uv sync
+# Install the shared core package (provides the `agent_core` module).
+uv pip install -e ../../shared/agent-core
 uv run alembic upgrade head
 uv run uvicorn app.main:app --reload
 ```
+
+> In Docker builds the shared package is copied into the image automatically
+> (the build context is the repository root). For local development, install it
+> editable as shown above, or add `shared/agent-core` to `PYTHONPATH`.
 
 #### Web UI (Angular)
 
@@ -95,6 +113,13 @@ npm start
 - `GET /chatkit/threads/{thread_id}` - Get thread history
 
 ## Project Structure
+
+> **Note:** The Python execution code (specialist agents, skills, tools, and the
+> LangGraph graph/nodes) lives in **`services/agent-worker`**. The
+> `services/agent-service` gateway keeps only the ChatKit server, the workflow
+> REST API, the NATS bridge, and mock workflow nodes. Shared infrastructure
+> (`config`, `db`, `models`, `messaging`) lives once in **`shared/agent-core`**
+> and is re-exported by each service's `internal/` package.
 
 ```
 ai-platform-swe-1.6-gen/
@@ -190,17 +215,18 @@ ai-platform-swe-1.6-gen/
 │       ├── tests/           # Worker tests
 │       ├── Dockerfile.worker
 │       └── Makefile
-├── deploy/                  # Deployment configurations
-│   ├── docker-compose.yml   # Docker Compose orchestration
-│   └── kubernetes/          # Kubernetes manifests (future)
-├── contracts/               # API contracts and schemas
-├── docs/                    # Documentation
-│   ├── architecture/        # Architecture diagrams
-│   ├── operations/          # Operational documentation
-│   └── threat-model/        # Security threat model
-├── PROGRESS.md             # Implementation progress
-├── README.md               # This file
-└── IMPLEMENTATION_PLAN.md   # Detailed implementation plan
+├── shared/
+│   └── agent-core/          # Shared Python package (agent_core)
+│       └── agent_core/
+│           ├── config.py    # Settings (single source of truth)
+│           ├── db.py        # Async engine, session, Base
+│           ├── models.py    # SQLAlchemy ORM models (canonical schema)
+│           └── messaging/
+│               └── nats.py  # NATSMessaging client (superset used by both services)
+├── docker-compose.yml       # Docker Compose orchestration (repo root)
+├── docs/                    # Documentation and Mermaid/SVG diagrams
+├── PROGRESS.md              # Implementation progress
+└── README.md               # This file
 ```
 
 ## Implementation Phases
@@ -220,6 +246,36 @@ ai-platform-swe-1.6-gen/
 
 See [PROGRESS.md](PROGRESS.md) for detailed implementation status.
 
+## Maintenance Refactor (Correctness + Best Practices)
+
+A cleanup pass fixed several latent bugs and reduced duplication:
+
+- **Fixed `chat_id`/`run_id` schema drift** — migration `004` renamed all `run_id`
+  columns to `chat_id`, but the ORM models and several queries had drifted
+  inconsistently (each service was even internally contradictory). All ORM
+  column references are now aligned to the canonical `chat_id`, fixing
+  `AttributeError`/SQL errors on the approvals and events paths.
+- **Fixed a `TypeError` on every worker state event** — the worker called
+  `nats.publish_event(chat_id=...)`, which is not a valid parameter; the swallowed
+  exception meant the UI silently received no progress. The invalid argument was
+  removed.
+- **Removed dead duplicated code** — `agent-service` no longer ships unused copies
+  of the specialist agents, skills, tools, and workflow-execution graph (those run
+  only in `agent-worker`). The associated security tests were relocated to the
+  worker.
+- **Extracted `shared/agent-core`** — `config`, `db`, `models`, and the
+  `NATSMessaging` client now live once and are re-exported by each service.
+- **Best-practice fixes** — replaced `print()` debugging with `logging`, replaced
+  deprecated `datetime.utcnow()` with timezone-aware `datetime.now(timezone.utc)`,
+  fixed the invalid CORS wildcard-with-credentials combination (now configurable
+  via `CORS_ALLOW_ORIGINS`), untracked the accidentally committed 37 MB Go
+  `server` binary, and added a root `.dockerignore`.
+
+> **Diagram note:** The Mermaid sources in `docs/*.mmd` were updated to reflect
+> the real NATS subjects (`agent.events.{run_id}.{event_type}`) and the shared
+> package. Re-run the commands in [Regenerating Diagrams](#regenerating-diagrams)
+> to refresh the committed `docs/svg/*.svg` images.
+
 ## Agent Container Creation Flow
 
 The platform now supports complete end-to-end agent container creation. The **first-flow** implementation uses the `mock-worker` container to validate the full message path without requiring real LLM calls or Docker container creation:
@@ -228,7 +284,7 @@ The platform now supports complete end-to-end agent container creation. The **fi
 2. **SSE Stream Initiated** → `AegisChatKitServer.respond()` returns an SSE stream
 3. **Container Creation** → Agent Service publishes `chat.start` to NATS
 4. **Control Plane** → Receives `chat.start`, attempts container creation (or skips in mock mode)
-5. **Mock Agent Worker** → Container `mock-worker` subscribes to `agent.events.{run_id}.>` and publishes `started`, `progress`, and `completed` events
+5. **Mock Agent Worker** → Container `mock-worker` subscribes to `chat.start`, then publishes `started`, `progress`, and `completed` events on `agent.events.{run_id}.{event_type}`
 6. **State Events** → Agent Service receives events via `NatsBridge` and yields them as ChatKit `progress_update` and `thread.item.done` SSE events
 7. **UI Rendering** → Angular `chat.component.ts` parses SSE events and updates the chat UI
 

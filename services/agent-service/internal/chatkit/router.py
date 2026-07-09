@@ -13,7 +13,10 @@ from typing import Optional
 import os
 import uuid
 import json
+import logging
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 chatkit_router = APIRouter()
 
@@ -51,9 +54,9 @@ async def chatkit_endpoint(request: Request):
     """ChatKit endpoint for streaming responses"""
     context = context_from_request(request)
     body = await request.body()
-    
-    print(f"ChatKit endpoint called, body: {body}")
-    
+
+    logger.info("ChatKit endpoint called (%d bytes)", len(body))
+
     # Convert UI format to ChatKit protocol format
     from chatkit.types import ThreadMetadata, UserMessageItem
     
@@ -63,9 +66,9 @@ async def chatkit_endpoint(request: Request):
         # Extract thread_id and message
         thread_id = ui_request.get("thread_id") or f"thread-{uuid.uuid4()}"
         message = ui_request.get("message", "")
-        
-        print(f"Thread ID: {thread_id}, Message: {message}")
-        
+
+        logger.info("ChatKit request thread_id=%s", thread_id)
+
         # Create thread metadata
         thread = ThreadMetadata(
             id=thread_id,
@@ -81,28 +84,19 @@ async def chatkit_endpoint(request: Request):
             content=[{"type": "input_text", "text": message}],
             inference_options={},
         )
-        
-        print(f"User message created: {user_message}")
-        
+
         # Get ChatKit server and call respond()
-        print("Getting ChatKit server...")
         server = await get_chatkit_server()
-        print(f"ChatKit server obtained: {server}")
-        
-        print("Calling server.respond...")
         event_stream = server.respond(thread, user_message, context)
-        print(f"Event stream created: {event_stream}")
-        
-        print("Returning streaming response")
+
+        logger.info("Returning ChatKit streaming response for thread_id=%s", thread_id)
         return StreamingResponse(
             event_stream,
             media_type="text/event-stream",
         )
         
     except Exception as e:
-        print(f"ChatKit server error: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception("ChatKit server error")
         raise HTTPException(status_code=500, detail=f"ChatKit server error: {str(e)}")
 
 

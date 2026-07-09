@@ -2,6 +2,9 @@ from collections.abc import AsyncIterator
 from typing import Any
 from internal.messaging.nats import NATSMessaging
 import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class NatsBridge:
@@ -41,24 +44,22 @@ class NatsBridge:
 
     async def subscribe_run_events(self, run_id: str) -> AsyncIterator[dict[str, Any]]:
         self._event_queue = asyncio.Queue()
-        
-        print(f"NATS bridge: Setting up subscriptions for run_id: {run_id}")
-        
-        # Subscribe to agent.events.>
-        await self.nats.subscribe_to_events(
-            event_handler=lambda event: (print(f"NATS bridge: Received event via subscribe_to_events: {event}"), self._event_queue.put_nowait(event)),
-            run_id=run_id,
-        )
-        
-        # Subscribe to agent.chat.{run_id}.>
-        await self.nats.subscribe_to_chat_events(
-            run_id=run_id,
-            event_handler=lambda event: (print(f"NATS bridge: Received event via subscribe_to_chat_events: {event}"), self._event_queue.put_nowait(event)),
-        )
-        
-        print(f"NATS bridge: Subscriptions set up for run_id: {run_id}")
-        
+
+        logger.info("NATS bridge: setting up subscriptions for run_id=%s", run_id)
+
+        def enqueue(event: dict[str, Any]) -> None:
+            logger.debug("NATS bridge: received event for run_id=%s: %s", run_id, event)
+            self._event_queue.put_nowait(event)
+
+        # Events published by the worker to agent.events.{run_id}.>
+        await self.nats.subscribe_to_events(event_handler=enqueue, run_id=run_id)
+
+        # Events published to agent.chat.{run_id}.>
+        await self.nats.subscribe_to_chat_events(run_id=run_id, event_handler=enqueue)
+
+        logger.info("NATS bridge: subscriptions ready for run_id=%s", run_id)
+
         while True:
             event = await self._event_queue.get()
-            print(f"NATS bridge: Yielding event from queue: {event}")
+            logger.debug("NATS bridge: yielding event for run_id=%s", run_id)
             yield event

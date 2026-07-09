@@ -1,3 +1,4 @@
+import logging
 import uuid
 import json
 from collections.abc import AsyncIterator
@@ -22,6 +23,8 @@ from internal.chatkit.event_mapper import (
     progress_from_event,
 )
 from internal.chatkit.nats_bridge import NatsBridge
+
+logger = logging.getLogger(__name__)
 
 
 def extract_text(input_message: UserMessageItem | None) -> str:
@@ -61,8 +64,7 @@ class AegisChatKitServer(ChatKitServer[RequestContext]):
         input: UserMessageItem | None,
         context: RequestContext,
     ) -> AsyncIterator[str]:
-        print("CHATKIT respond called - START")
-        print(f"Thread: {thread.id}, Input: {input}, Context: {context}")
+        logger.info("ChatKit respond called for thread=%s", thread.id)
 
         prompt = extract_text(input)
 
@@ -78,7 +80,7 @@ class AegisChatKitServer(ChatKitServer[RequestContext]):
         run_id = f"run-{uuid.uuid4()}"
         conversation_id = thread.id
 
-        print("CHATKIT created run", run_id)
+        logger.info("ChatKit created run %s for conversation %s", run_id, conversation_id)
 
         # Important: Subscribe before publishing agent.start
         events = self.nats.subscribe_run_events(run_id)
@@ -95,7 +97,7 @@ class AegisChatKitServer(ChatKitServer[RequestContext]):
             },
         )
 
-        print("NATS agent.start published", run_id)
+        logger.info("NATS agent.start published for run %s", run_id)
 
         progress_event = ProgressUpdateEvent(
             icon="agent",
@@ -104,11 +106,11 @@ class AegisChatKitServer(ChatKitServer[RequestContext]):
         yield self._event_to_sse(progress_event)
 
         async for event in events:
-            print("NATS event received", event)
+            logger.debug("NATS event received for run %s: %s", run_id, event)
 
             if is_completed_event(event):
                 final_text = final_answer_from_event(event)
-                print("YIELDING final assistant message")
+                logger.info("Run %s completed", run_id)
                 event = self._assistant_message(
                     thread=thread,
                     context=context,
@@ -118,7 +120,7 @@ class AegisChatKitServer(ChatKitServer[RequestContext]):
                 break
 
             if is_failed_event(event):
-                print("YIELDING failed assistant message")
+                logger.info("Run %s failed", run_id)
                 event = self._assistant_message(
                     thread=thread,
                     context=context,
@@ -128,7 +130,7 @@ class AegisChatKitServer(ChatKitServer[RequestContext]):
                 break
 
             if is_cancelled_event(event):
-                print("YIELDING cancelled assistant message")
+                logger.info("Run %s cancelled", run_id)
                 event = self._assistant_message(
                     thread=thread,
                     context=context,
@@ -137,7 +139,6 @@ class AegisChatKitServer(ChatKitServer[RequestContext]):
                 yield self._event_to_sse(event)
                 break
 
-            print("YIELDING progress update")
             event = progress_from_event(event)
             yield self._event_to_sse(event)
 

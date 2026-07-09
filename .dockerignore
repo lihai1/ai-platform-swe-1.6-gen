@@ -1,0 +1,38 @@
+# Version control
+.git/
+.gitignore
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+.verify-venv/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Node / Angular
+node_modules/
+apps/web/.angular/
+dist/
+build/
+
+# Go build artifacts (large compiled binary should never be in an image)
+services/control-plane/server
+
+# Test artifacts
+playwright-report/
+test-results/
+apps/web/playwright-report/
+apps/web/test-results/
+
+# Local env / IDE
+.env
+.env.*
+.vscode/
+.idea/
+*.log

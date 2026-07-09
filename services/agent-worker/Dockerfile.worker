@@ -9,8 +9,15 @@ RUN apt-get update && apt-get install -y \
 # Set working directory
 WORKDIR /app
 
-# Copy agent service code
-COPY . /app/
+# NOTE: build context is the repository root (see Makefile) so that the shared
+# agent_core package can be copied into the image.
+
+# Shared core package (single source of truth for config/db/models/messaging),
+# importable via PYTHONPATH=/app.
+COPY shared/agent-core/agent_core /app/agent_core
+
+# Copy agent worker code
+COPY services/agent-worker/ /app/
 
 # Install Python dependencies from pyproject.toml
 RUN pip install --no-cache-dir -e .
@@ -19,7 +26,7 @@ RUN pip install --no-cache-dir -e .
 RUN mkdir -p /workspace
 
 # Copy startup script
-COPY scripts/container-start.sh /app/container-start.sh
+COPY services/agent-worker/scripts/container-start.sh /app/container-start.sh
 RUN chmod +x /app/container-start.sh
 
 # Set environment variables
