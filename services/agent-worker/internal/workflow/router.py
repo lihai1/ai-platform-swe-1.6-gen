@@ -186,7 +186,7 @@ async def approve_approval(
     # Get the approval
     query = select(AgentApproval).where(
         AgentApproval.id == approval_id,
-        AgentApproval.run_id == run_id
+        AgentApproval.chat_id == run_id
     )
     result = await session.execute(query)
     approval = result.scalar_one_or_none()
@@ -240,7 +240,7 @@ async def reject_approval(
     # Get the approval
     query = select(AgentApproval).where(
         AgentApproval.id == approval_id,
-        AgentApproval.run_id == run_id
+        AgentApproval.chat_id == run_id
     )
     result = await session.execute(query)
     approval = result.scalar_one_or_none()

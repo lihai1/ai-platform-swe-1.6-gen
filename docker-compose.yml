@@ -56,8 +56,8 @@ services:
 
   agent-service:
     build:
-      context: ./services/agent-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/agent-service/Dockerfile
     container_name: agentic-agent-service
     depends_on:
       postgres:
@@ -95,8 +95,8 @@ services:
 
   mock-worker:
     build:
-      context: ./services/agent-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/agent-service/Dockerfile
     container_name: agentic-mock-worker
     depends_on:
       nats:

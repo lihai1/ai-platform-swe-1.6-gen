@@ -36,8 +36,8 @@ clean-start: clean build-containers
 build-containers:
 	@echo "Building containers manually..."
 	docker build -t ai-platform-swe-16-gen-control-plane ./services/control-plane
-	docker build -t ai-platform-swe-16-gen-agent-service ./services/agent-service
-	docker build -t ai-platform-swe-16-gen-agent-worker ./services/agent-worker -f ./services/agent-worker/Dockerfile.worker
+	docker build -t ai-platform-swe-16-gen-agent-service -f ./services/agent-service/Dockerfile .
+	docker build -t ai-platform-swe-16-gen-agent-worker -f ./services/agent-worker/Dockerfile.worker .
 	docker build -t ai-platform-swe-16-gen-web ./apps/web
 	@echo "All containers built successfully"
 

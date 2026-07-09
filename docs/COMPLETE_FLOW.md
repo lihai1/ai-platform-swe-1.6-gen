@@ -3,6 +3,13 @@
 ## Overview
 This document describes the complete flow from UI start page to agent execution, including all NATS messages, service interactions, and state transitions.
 
+> **Subject reference:** The authoritative, verified NATS subject list is in
+> [NATS Subject Patterns](#nats-subject-patterns) below. Note that **agent
+> lifecycle events are published on `agent.events.{run_id}.{event_type}`** (the
+> `AGENT_EVENTS` JetStream stream), *not* on `agent.chat.*`. The step-by-step
+> narrative that follows is illustrative; some inline code snippets are
+> simplified. Inline `file:line` references may drift as the code evolves.
+
 ## Architecture Components
 
 ### Services
@@ -375,23 +382,26 @@ await nats.publish_chat_close(chat_id=thread_id)
 
 ## NATS Subject Patterns
 
-### Command Subjects
-- `chat.start` - Trigger container creation
-- `chat.close` - Trigger container termination
-- `agent.chat.{chat_id}.run.start` - Start workflow execution
-- `agent.chat.{chat_id}.run.cancel` - Cancel workflow
-- `agent.chat.{chat_id}.run.resume` - Resume from approval
+### Lifecycle Subjects (plain NATS, consumed by the Go control plane)
+- `chat.start` - Trigger worker container creation
+- `chat.close` - Trigger worker container termination
 
-### Event Subjects
-- `agent.chat.{chat_id}.start` - Container ready signal
-- `agent.chat.{chat_id}.{state}` - State transition events
+### Command / Orchestration Subjects (JetStream stream `AGENT_COMMANDS`, subjects `agent.chat.>`)
+- `agent.chat.{run_id}.user.events` - Orchestration commands (`command_type`: `run.start`, `run.cancel`, `run.resume`); the worker subscribes here.
+- `agent.chat.{run_id}.{command_type}` - Generic per-run command subject used by `publish_command`.
+
+### Event Subjects (JetStream stream `AGENT_EVENTS`, subjects `agent.events.>`)
+- `agent.events.{run_id}.{event_type}` - All agent lifecycle/state events. `event_type` is one of:
   - `created`, `preparing_workspace`, `scouting`, `planning`, `designing`
   - `implementing`, `testing`, `reviewing`, `verifying`, `repairing`
   - `waiting_approval`, `completed`, `failed`, `cancelled`, `budget_exceeded`
+  - plus `started` / `progress` (emitted by the mock worker)
 
 ### Subscription Patterns
-- `agent.chat.{chat_id}.>` - All events for specific chat
-- `agent.chat.>` - All chat-related messages (worker subscription)
+- `agent.events.{run_id}.>` - All events for one run (agent-service `NatsBridge` + `subscribe_to_events`).
+- `agent.events.>` - All events across all runs (agent-service startup subscription for DB persistence).
+- `agent.chat.{run_id}.>` - All chat-scoped messages for one run.
+- `agent.chat.>.user.events` - Worker user events fan-in (agent-service).
 
 ## Error Handling
 

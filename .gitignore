@@ -62,3 +62,6 @@ apps/web/playwright-report/
 apps/web/test-results/
 playwright-report/
 test-results/
+
+# Compiled Go server binary (build artifact, must not be committed)
+services/control-plane/server

@@ -47,7 +47,7 @@ class PostgreSQLStore:
             from internal.models import AgentEvent
             event = AgentEvent(
                 id=message_id,
-                run_id=thread_id,
+                chat_id=thread_id,
                 event_type="message",
                 event_data={"role": role, "content": content},
                 sequence_number=0,
@@ -61,7 +61,7 @@ class PostgreSQLStore:
             from internal.models import AgentEvent
             result = await session.execute(
                 select(AgentEvent).where(
-                    AgentEvent.run_id == thread_id,
+                    AgentEvent.chat_id == thread_id,
                     AgentEvent.event_type == "message"
                 )
             )

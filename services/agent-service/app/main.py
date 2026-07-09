@@ -25,8 +25,8 @@ async def lifespan(app: FastAPI):
     try:
         await connect()
     except Exception as e:
-        print(f"Warning: Failed to connect to database: {e}")
-        print("Continuing without database connection (mock mode)")
+        logger.warning("Failed to connect to database: %s", e)
+        logger.warning("Continuing without database connection (mock mode)")
     
     # Connect to NATS
     try:
@@ -70,7 +70,7 @@ async def lifespan(app: FastAPI):
     try:
         await disconnect()
     except Exception as e:
-        print(f"Warning: Failed to disconnect from database: {e}")
+        logger.warning("Failed to disconnect from database: %s", e)
 
 app = FastAPI(
     title="Agent Service",
@@ -79,10 +79,19 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# CORS: a wildcard origin cannot be combined with credentials per the Fetch spec.
+# Allowed origins are configurable via CORS_ALLOW_ORIGINS (comma-separated).
+_cors_origins = [
+    origin.strip()
+    for origin in os.getenv("CORS_ALLOW_ORIGINS", "*").split(",")
+    if origin.strip()
+]
+_allow_credentials = _cors_origins != ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )

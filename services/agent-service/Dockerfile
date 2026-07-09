@@ -1,13 +1,19 @@
+# NOTE: build context is the repository root (see docker-compose.yml / Makefile)
+# so that the shared agent_core package can be copied into the image.
 FROM python:3.12-slim
 
 WORKDIR /app
 
 RUN pip install uv
 
-COPY pyproject.toml ./
+COPY services/agent-service/pyproject.toml ./
 RUN uv pip install --system -r pyproject.toml
 
-COPY . .
+# Shared core package (single source of truth for config/db/models/messaging).
+# Placed on the import path via /app.
+COPY shared/agent-core/agent_core ./agent_core
+
+COPY services/agent-service/ .
 
 EXPOSE 8000
 

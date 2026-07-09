@@ -31,7 +31,6 @@ async def publish_state_event(run_id: str, state: str, payload: dict = None):
         await nats.publish_event(
             event_type=state.lower(),
             run_id=run_id,
-            chat_id=run_id,
             payload=payload or {}
         )
         logger.info(f"Published state event: {state} for run {run_id}")
