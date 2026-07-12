@@ -50,7 +50,7 @@ This repository is intended to be a strong, opinionated starter for building mic
 
 ## Key Features
 
-- **Container-Based Isolation**: Each agent workflow runs in isolated Docker containers with filesystem isolation, network restrictions, and resource limits
+- **Ephemeral, Disposable Workers**: Each run executes in its own throwaway Docker container. The target repository is cloned from GitHub into a container-local `/workspace` — no host files are bind-mounted — so a crashed or misbehaving run leaves the host untouched and can be safely retried. (This is disposability/blast-radius containment, not yet policy-enforced sandboxing — no default-deny egress, credential isolation, or resource limits.)
 - **Multi-Agent Orchestration**: Support for Python single agents and CrewAI-based multi-agent systems, including a custom wrapper worker type that discovers available agent projects and lets the user pick one from the chat session
 - **Real-Time Event Streaming**: SSE-based live agent activity monitoring with browser reconnection support
 - **Human-in-the-Loop Approval**: LangGraph interrupts for sensitive operations requiring human oversight
@@ -231,6 +231,46 @@ The current 4-service architecture is designed for the POC and personal-use scen
 - **File Storage**: Separate blob storage service for workspace artifacts and generated files
 
 This modular design allows the platform to evolve from a single-user home deployment to a multi-tenant enterprise system by extracting services as scale demands.
+
+## Comparison With Related Agent Platforms
+
+This POC is a lightweight, **generic control plane for engineering agents**: it owns the UI, run lifecycle, event streaming, and per-run containerized execution, and it is not tied to a single agent framework. The default engineering workflow is built on LangGraph.
+
+**Command path** (UI → run) and **event path** (run → UI) today:
+
+```text
+UI → Agent Service → NATS → Control Plane → per-run Docker worker
+Worker → NATS → Agent Service → UI (SSE)
+```
+
+Execution modes currently wired into the worker model: a **simple/custom worker** (`single-agent`), a **LangGraph specialist workflow** (`specialist`), and **CrewAI projects** (`crewai`).
+
+> Status note: each run executes in an **ephemeral, disposable Docker container**. Source is cloned from GitHub into a container-local `/workspace` with **no host bind mounts**, so a crashed run causes no host-side harm and can be retried safely. This gives good blast-radius containment, but it is **not** policy-enforced sandboxing yet — there is no default-deny egress, credential isolation, declarative filesystem policy, or strict per-run resource policy. That stricter layer is where OpenShell/NemoClaw would fit later.
+
+| Project | What it is | Relation to this POC | Status |
+| --- | --- | --- | --- |
+| **This POC** | Generic control plane for engineering agents | Owns UI, runs, events, and ephemeral GitHub-sourced containers | Base platform |
+| **CrewAI** | Role-based multi-agent framework | Runs as one worker execution mode | Implemented |
+| **LangGraph** | Stateful workflow engine | Powers the default specialist workflow | Implemented |
+| **Open Agent Platform** | LangGraph-focused agent-management UI | UX/reference for agent management | Reference only |
+| **MetaGPT** | Multi-agent "software company" pattern | Design inspiration; heavier/opinionated | Reference only |
+| **SuperAGI** | General autonomous-agent platform | Broader agent management | Reference only |
+| **Microsoft Agent Framework** | Unified agent SDK (Semantic Kernel + AutoGen) | Alternative workflow SDK, not a control plane | Reference only |
+| **OpenShell** | Policy-enforced sandbox runtime for autonomous agents | Stronger isolation than current Docker workers | Optional future runtime |
+| **NemoClaw** | Reference stack/CLI that runs agents inside OpenShell | Packaging/blueprint layer over OpenShell | Optional future runtime |
+| **OpenClaw** | Personal AI assistant/operator | Low-level agent UX, not a control plane | Optional integration |
+
+### Main Takeaway
+
+The POC does **not** require NemoClaw or OpenShell to be useful:
+
+```text
+This POC           = engineering-agent control plane (UI, runs, events, workers)
+CrewAI/LangGraph   = agent workflow/execution layers (used inside workers)
+OpenShell/NemoClaw = optional future hardened runtime (replaces plain Docker workers)
+```
+
+Today workers are plain, ephemeral Docker containers, kept simple. If stronger isolation is needed later, an OpenShell-style sandbox can be adopted as one runtime option without changing the platform shape.
 
 ## Project Structure
 

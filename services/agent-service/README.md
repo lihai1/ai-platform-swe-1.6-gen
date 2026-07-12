@@ -143,6 +143,30 @@ For the E2E smoke test, the `mock-worker` container is used instead of a real ag
 3. Agent Service receives the events via global event stream and maps them to ChatKit protocol events
 4. SSE stream returns the events to the UI
 
+## Project Structure
+
+```
+agent-service/
+├── app/                     # FastAPI application
+├── internal/
+│   ├── agent/              # Agent-related logic
+│   ├── agents/             # Shared agent implementations
+│   ├── chatkit/            # ChatKit protocol implementation
+│   ├── handlers/           # HTTP request handlers
+│   ├── messaging/          # NATS messaging layer
+│   ├── skills/             # Skill definitions
+│   └── tools/              # Tool implementations
+├── migrations/             # Database migration files
+├── tests/
+│   ├── e2e/                # End-to-end tests
+│   ├── fixtures/           # Test fixtures
+│   ├── integration/        # Integration tests
+│   └── security/           # Security tests
+└── docs/
+    ├── operations/         # Operational documentation
+    └── threat-model/       # Security threat models
+```
+
 ## Configuration
 
 Environment variables:

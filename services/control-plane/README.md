@@ -142,6 +142,26 @@ make lint
 make fmt
 ```
 
+## Project Structure
+
+```
+control-plane/
+├── cmd/
+│   └── server/              # Application entry point
+├── internal/
+│   ├── config/              # Configuration management
+│   ├── db/                  # Database connection and setup
+│   ├── handlers/            # HTTP request handlers
+│   ├── middleware/          # HTTP middleware (auth, logging, etc.)
+│   ├── models/              # Data models and DTOs
+│   ├── orchestrator/        # Docker container orchestration
+│   ├── repository/          # Repository pattern implementations
+│   └── service/             # Business logic layer
+├── migrations/              # Database migration files
+└── tests/
+    └── integration/         # Integration tests
+```
+
 ## Database Schema
 
 The control plane uses the following schema:

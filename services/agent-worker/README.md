@@ -99,6 +99,26 @@ make test-integration
 
 For the first-flow E2E test, the `mock-worker` container in the root `docker-compose.yml` simulates a worker by publishing `started`, `progress`, and `completed` events.
 
+## Project Structure
+
+```
+agent-worker/
+├── internal/
+│   ├── agents/             # Agent framework implementations
+│   │   ├── crewai/         # CrewAI integration
+│   │   ├── single-agent/   # Single-agent mode
+│   │   └── specialist/     # Specialist agent workflow
+│   ├── handlers/           # NATS message handlers
+│   ├── messaging/          # NATS messaging layer
+│   ├── skills/             # Skill definitions
+│   ├── tools/              # Tool implementations
+│   ├── workflow/           # LangGraph workflow definitions
+│   └── workspace/          # Workspace operations
+├── scripts/                # Container startup scripts
+└── tests/
+    └── integration/         # Integration tests
+```
+
 ## Environment Variables
 
 - `RUN_ID`: Run ID for the worker
