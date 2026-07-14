@@ -5,6 +5,7 @@ from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from internal.agents.model_factory import get_model
+from internal.agents.code_guidelines import load_code_guidelines
 from internal.skills.registry import Skill, SkillRegistry
 from internal.tools.agent_tools import create_repository_tools, create_repository_metadata_tools
 from pydantic import BaseModel
@@ -18,6 +19,7 @@ class AgentFactory:
         self.skill_registry = skill_registry
         self.control_plane_base_url = control_plane_base_url
         self.http_client = httpx.AsyncClient()
+        self._code_guidelines = load_code_guidelines()
     
     async def create_agent(
         self,
@@ -51,22 +53,20 @@ class AgentFactory:
             repository_id,
             context
         )
-        
-        # Create the agent with minimal context
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", self._build_system_prompt(skill, context)),
-            MessagesPlaceholder(variable_name="chat_history", optional=True),
-            ("human", "{input}"),
-            MessagesPlaceholder(variable_name="agent_scratchpad"),
-        ])
-        
-        agent = create_agent(model, tools, system_prompt=prompt)
-        
-        # Return agent and tools for invocation (LangChain 0.3+ pattern)
+
+        # Create the agent using LangChain 1.3.x API
+        system_prompt = self._build_system_prompt(skill, context)
+        graph = create_agent(
+            model=model,
+            tools=tools,
+            system_prompt=system_prompt,
+        )
+
+        # Return agent and tools for invocation (LangChain 1.3+ pattern)
         return {
-            "agent": agent,
+            "agent": graph,
             "tools": tools,
-            "prompt": prompt,
+            "system_prompt": system_prompt,
             "model": model
         }
     
@@ -104,6 +104,10 @@ class AgentFactory:
             f"\n{skill.markdown}",
             f"\nYour capabilities: {', '.join(skill.definition.capabilities)}",
         ]
+        
+        # Add code quality guidelines if available
+        if self._code_guidelines:
+            prompt_parts.append(self._code_guidelines)
         
         # Add minimal context if provided
         if context:

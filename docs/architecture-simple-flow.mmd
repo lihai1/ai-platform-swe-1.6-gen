@@ -1,0 +1,10 @@
+graph LR
+    UI[Angular UI] --> AgentService[Agent Service]
+    AgentService --> NATS[NATS]
+    NATS --> ControlPlane[Control Plane]
+    ControlPlane --> Worker[Agent Worker]
+    Worker --> NATS
+    NATS --> AgentService
+    AgentService --> UI
+    AgentService --> DB[(PostgreSQL)]
+    ControlPlane --> DB

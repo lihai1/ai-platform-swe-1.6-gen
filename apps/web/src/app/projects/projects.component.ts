@@ -103,10 +103,10 @@ interface Repository {
               </div>
               <div class="form-group">
                 <label for="gitUrl">Git URL</label>
-                <input 
-                  id="gitUrl" 
-                  type="text" 
-                  [(ngModel)]="newRepo.git_url" 
+                <input
+                  id="gitUrl"
+                  type="text"
+                  [(ngModel)]="newRepo.git_url"
                   (ngModelChange)="onGitUrlChange()"
                   placeholder="https://github.com/username/repo.git"
                   class="form-input"
@@ -526,7 +526,7 @@ export class ProjectsComponent implements OnInit {
   currentProjectId: string | null = null;
   addingRepo = false;
   repoError: string | null = null;
-  newRepo: { name: string; git_url: string; branch: string } = { name: '', git_url: '', branch: 'main' };
+  newRepo: { name: string; git_url: string; branch: string } = { name: '', git_url: 'https://github.com/crewAIInc/crewAI-examples.git', branch: 'main' };
 
   constructor(
     private router: Router,

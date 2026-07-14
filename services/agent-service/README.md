@@ -41,6 +41,19 @@ The agent-service is the **HTTP API and messaging layer** of the platform. It do
 
 ### Development
 
+#### Local Development (with docker-compose services)
+
+**Use this for testing changed code locally** - run the agent-service locally while other services run in docker-compose:
+
+```bash
+# From the project root, this starts agent-service locally and other services in docker-compose
+make start-local SERVICES=agent-service
+```
+
+The agent-service will automatically start in the background with hot-reload enabled, making it ideal for testing code changes without rebuilding containers.
+
+#### Standalone Development
+
 1. Install dependencies:
 ```bash
 uv sync
@@ -53,7 +66,7 @@ uv run alembic upgrade head
 
 3. Run the service:
 ```bash
-uv run uvicorn app.main:app --reload
+uv run uvicorn internal.chatkit.server:app --reload
 ```
 
 ### Docker Compose

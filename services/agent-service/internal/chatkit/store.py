@@ -41,6 +41,21 @@ class PostgreSQLStore:
                 }
         return None
 
+    async def get_thread_by_project_id(self, project_id: str) -> Optional[dict]:
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(AgentRun).where(AgentRun.project_id == project_id)
+            )
+            run = result.scalar_one_or_none()
+            if run:
+                return {
+                    "id": run.id,
+                    "run_id": run.id,
+                    "title": run.task[:100],
+                    "created_at": run.created_at,
+                }
+        return None
+
     async def add_message(self, run_id: str, role: str, content: str) -> str:
         message_id = str(uuid.uuid4())
         # Store in AgentEvent or create ChatMessage model

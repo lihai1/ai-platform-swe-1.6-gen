@@ -1,59 +1,26 @@
-FROM python:3.12-slim
+FROM agentic-agent-worker-base-builder:latest
 
-# Install system dependencies and Go toolchain
-RUN apt-get update && apt-get install -y \
-    git \
-    docker-cli \
-    wget \
-    ca-certificates \
-    libnss3 \
-    libnspr4 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libcups2 \
-    libdrm2 \
-    libxkbcommon0 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxfixes3 \
-    libxrandr2 \
-    libgbm1 \
-    libasound2 \
-    && rm -rf /var/lib/apt/lists/*
+# Copy specialist-specific code
+COPY services/agent-worker/internal/agents/specialist /app/internal/agents/specialist
+COPY services/agent-worker/internal/workflow /app/internal/workflow
+COPY services/agent-worker/internal/tools /app/internal/tools
+COPY services/agent-worker/internal/skills /app/internal/skills
+COPY services/agent-worker/internal/workspace /app/internal/workspace
 
-RUN wget -q https://go.dev/dl/go1.26.0.linux-amd64.tar.gz && \
-    tar -C /usr/local -xzf go1.26.0.linux-amd64.tar.gz && \
-    rm go1.26.0.linux-amd64.tar.gz
-ENV PATH=/usr/local/go/bin:$PATH
+# Install specialist-specific dependencies
+RUN pip install --no-cache-dir \
+    langgraph-checkpoint-postgres>=3.0.5 \
+    psycopg-binary>=3.2.6 \
+    sqlalchemy>=2.0.51 \
+    asyncpg>=0.31.0 \
+    alembic>=1.18.5 \
+    fastapi>=0.139.0 \
+    sse-starlette>=3.4.5 \
+    langsmith>=0.10.2 \
+    playwright>=1.61.0
 
-# Set working directory
-WORKDIR /app
-
-# Copy agent worker code and install dependencies
-COPY services/agent-worker /app
-ENV PIP_DEFAULT_TIMEOUT=300
-RUN pip install --no-cache-dir -e .
-
-# Install Playwright browsers
+# Install Playwright browser for web automation tasks
 RUN playwright install chromium
 
-# Copy the fixture repository used for the first real workflow
-COPY services/agent-service/tests/fixtures /app/fixtures
-RUN cd /app/fixtures/go-rest-feature && git init -b main && \
-    git config user.email "agent@local" && \
-    git config user.name "Agent Worker" && \
-    git add . && git commit -m "init"
-
-# Copy common scripts
-COPY services/agent-worker/scripts/container-start.sh /app/container-start.sh
-RUN chmod +x /app/container-start.sh
-COPY services/agent-worker/scripts/clone-repo.sh /app/scripts/clone-repo.sh
-RUN chmod +x /app/scripts/clone-repo.sh
-
-# Set environment variables
-ENV WORKSPACE_PATH=/workspace
-ENV PYTHON_MODULE=specialist_worker.main
-ENV PYTHONPATH=/app/internal/agents/specialist/src
-
-# Default command runs the specialist worker
-CMD ["/app/container-start.sh"]
+# Set worker-specific environment variables
+ENV PYTHON_MODULE=internal.agents.specialist.main

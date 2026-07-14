@@ -173,7 +173,7 @@ class AegisChatKitServer(ChatKitServer[RequestContext]):
         """Persist a message to the store."""
         try:
             await self.store.add_message(
-                thread_id=thread_id,
+                run_id=thread_id,
                 role=role,
                 content=content,
             )
@@ -311,7 +311,14 @@ class AegisChatKitServer(ChatKitServer[RequestContext]):
         context: RequestContext,
     ) -> dict:
         """Handle a failed event."""
-        error_text = f"Agent failed: {event.get('message', 'unknown error')}"
+        payload = _payload(event)
+        error_message = (
+            payload.get("error")
+            or payload.get("message")
+            or event.get("message")
+            or "unknown error"
+        )
+        error_text = f"Agent failed: {error_message}"
         print("YIELDING failed assistant message")
         return await self._build_terminal_assistant_result(
             thread=thread,
@@ -387,4 +394,10 @@ class AegisChatKitServer(ChatKitServer[RequestContext]):
         
         # Note: projects are handled separately via event payload, not on the ChatKit item
         # ChatKit's AssistantMessageItem doesn't support dynamic fields
-        return ThreadItemDoneEvent(item=item)
+        event = ThreadItemDoneEvent(item=item)
+        # Add thread_id to the event for UI to capture
+        event_dict = event.model_dump()
+        event_dict["thread_id"] = thread.id
+        if projects:
+            event_dict["projects"] = projects
+        return ThreadItemDoneEvent(**event_dict)

@@ -428,21 +428,22 @@ class NATSMessaging:
         event_handler: Callable[[Dict[str, Any]], None],
     ) -> None:
         """Subscribe to worker ready signals from agent workers"""
-        if not self.js:
+        if not self.nc:
             raise RuntimeError("NATS not connected")
 
-        subject = "agent.control.worker.>.ready"
-        consumer_name = f"{self.service_id}-worker-ready-consumer"
+        subject = "agent.control.worker.*.ready"
 
         try:
-            # Use JetStream subscription to match worker's JetStream publication
-            await self.js.subscribe(
-                subject=subject,
-                stream="AGENT_CONTROL",
-                cb=await self._create_event_handler(event_handler),
-                manual_ack=True,
-            )
-            logger.info(f"Subscribed to worker ready signals on subject: {subject} with stream AGENT_CONTROL")
+            # Use plain NATS subscription since worker publishes to plain NATS
+            async def wrapped(msg):
+                try:
+                    data = json.loads(msg.data.decode())
+                    await event_handler(data)
+                except Exception as e:
+                    logger.error(f"Error handling worker ready event: {e}")
+
+            sub = await self.nc.subscribe(subject, cb=wrapped)
+            logger.info(f"Subscribed to worker ready signals on subject: {subject}")
         except Exception as e:
             logger.error(f"Failed to subscribe to worker ready signals: {e}")
             raise

@@ -4,8 +4,8 @@ graph TB
     end
 
     subgraph "API Layer"
-        ControlPlane[Go Control Plane<br/>Port 8080<br/>Users, Projects, Repos]
-        AgentService[Python Agent Service<br/>Port 8000<br/>FastAPI<br/>ChatKit + Messaging]
+        ControlPlane[Go Control Plane<br/>Port 8080<br/>Resource Management + Container Orchestration]
+        AgentService[Python Agent Service<br/>Port 8000<br/>Proxy + Auth + ChatKit]
     end
 
     subgraph "Worker Layer"
@@ -18,7 +18,6 @@ graph TB
 
     subgraph "Data Layer"
         PostgreSQL[(PostgreSQL<br/>Port 5433)]
-        LangSmith[LangSmith<br/>Tracing]
     end
 
     subgraph "Execution Layer"
@@ -32,12 +31,12 @@ graph TB
     end
 
     %% Client to API connections
-    WebUI -->|HTTP/REST| ControlPlane
     WebUI -->|HTTP/REST| AgentService
     WebUI -->|SSE Events| AgentService
 
     %% API to Worker via NATS
     AgentService -->|Publish Commands| NATS
+    ControlPlane -->|Subscribe Control Signals| NATS
     AgentWorker -->|Subscribe Commands| NATS
     AgentWorker -->|Publish Events| NATS
     AgentService -->|Subscribe Events| NATS
@@ -47,8 +46,6 @@ graph TB
     AgentService -->|SQL| PostgreSQL
     AgentWorker -->|Checkpointer| PostgreSQL
 
-    %% LangSmith tracing
-    AgentWorker -->|Tracing| LangSmith
 
     %% Workspace management
     AgentWorker -->|Create/Execute| DockerWorkspaces
@@ -71,6 +68,6 @@ graph TB
     class ControlPlane,AgentService api
     class AgentWorker worker
     class NATS messaging
-    class PostgreSQL,LangSmith data
+    class PostgreSQL data
     class DockerWorkspaces execution
     class OpenAI,Anthropic,Ollama external

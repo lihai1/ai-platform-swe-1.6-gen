@@ -1,10 +1,11 @@
 """Single agent implementation for simple task execution"""
 from typing import Dict, Any, Optional
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.agents import create_agent
 from langchain_core.tools import tool
 from internal.agents.schemas import ImplementationResult
 from internal.agents.model_factory import get_model
+from internal.agents.code_guidelines import load_code_guidelines
 from internal.tools.workspace import WorkspaceTools
 from internal.tools.agent_tools import create_workspace_tools, create_web_search_tools
 from internal.agents.result_parsers import parse_implementation_result
@@ -24,6 +25,7 @@ class SingleAgent:
         self.model = get_model(model_name=model_name, mock_mode=mock_mode, llm_provider=llm_provider)
         self.mock_mode = mock_mode
         self.llm_provider = llm_provider
+        self._code_guidelines = load_code_guidelines()
     
     async def reason(
         self,
@@ -48,6 +50,10 @@ Follow these guidelines:
 - Use available tools to read files, write files, check git status, run tests, search the web, etc.
 - Return a structured result with your answer"""
         
+        # Add code quality guidelines if available
+        if self._code_guidelines:
+            system_prompt += self._code_guidelines
+        
         # Create tools for the agent - all available workspace tools + web search
         tools = create_workspace_tools(
             workspace_id,
@@ -62,18 +68,23 @@ Follow these guidelines:
             include_apply_patch=True,
         )
         tools.extend(create_web_search_tools())
-        
-        # Create agent with system prompt as string
-        agent = create_agent(self.model, tools, system_prompt=system_prompt)
-        
+
+        # Create agent using LangChain 1.3.x API
+        graph = create_agent(
+            model=self.model,
+            tools=tools,
+            system_prompt=system_prompt,
+        )
+
         try:
-            result = await agent.ainvoke({
-                "task": task,
-                "repository_summary": json.dumps(repository_summary, indent=2),
+            result = await graph.ainvoke({
+                "messages": [
+                    {"role": "user", "content": f"Repository summary:\n{json.dumps(repository_summary, indent=2)}\n\nTask: {task}"}
+                ]
             })
-            
+
             return _parse_reasoning_result(result)
-            
+
         except Exception as e:
             logger.error(f"Single agent reasoning failed: {e}")
             return {
@@ -97,8 +108,7 @@ Follow these guidelines:
         if run_id and not workspace_tools.run_id:
             workspace_tools.run_id = run_id
         
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a versatile software development agent. Your job is to implement the requested changes in a repository.
+        system_prompt = """You are a versatile software development agent. Your job is to implement the requested changes in a repository.
 
 Follow these guidelines:
 - Analyze the repository structure and understand the codebase
@@ -107,7 +117,14 @@ Follow these guidelines:
 - Add appropriate tests when needed
 - Use the available tools to read files, write files, and check git status
 - Work through the task systematically
-- Return a structured result with your implementation details"""),
+- Return a structured result with your implementation details"""
+        
+        # Add code quality guidelines if available
+        if self._code_guidelines:
+            system_prompt += self._code_guidelines
+        
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", system_prompt),
             ("human", """Task: {task}
 
 Implementation Plan:
@@ -130,7 +147,7 @@ Return a structured result with:
 - errors: Any errors encountered
 - warnings: Any warnings""")
         ])
-        
+
         # Create tools for the agent
         tools = create_workspace_tools(
             workspace_id,
@@ -143,19 +160,46 @@ Return a structured result with:
             include_run_tests=False,
             include_run_command=False,
         )
-        
-        # Create agent
-        agent = create_agent(self.model, tools, system_prompt=prompt)
-        # LangChain 0.3+ pattern - invoke agent directly
+
+        # Create agent using LangChain 1.3.x API
+        graph = create_agent(
+            model=self.model,
+            tools=tools,
+            system_prompt=system_prompt,
+        )
+
         try:
-            result = await agent.ainvoke({
-                "task": task,
-                "implementation_plan": json.dumps(implementation_plan, indent=2),
-                "repository_summary": json.dumps(repository_summary, indent=2),
+            result = await graph.ainvoke({
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": f"""Task: {task}
+
+Implementation Plan:
+{json.dumps(implementation_plan, indent=2)}
+
+Repository Summary:
+{json.dumps(repository_summary, indent=2)}
+
+Implement the changes. Use the available tools to:
+1. Read existing files to understand the codebase
+2. Write or modify files as needed
+3. Check git status and diff to track changes
+
+Return a structured result with:
+- files_modified: List of files you modified
+- files_created: List of files you created
+- lines_added: Total lines added
+- lines_removed: Total lines removed
+- success: Whether implementation was successful
+- errors: Any errors encountered
+- warnings: Any warnings"""
+                    }
+                ]
             })
-            
+
             return parse_implementation_result(result)
-            
+
         except Exception as e:
             logger.error(f"Single agent failed: {e}")
             return ImplementationResult(

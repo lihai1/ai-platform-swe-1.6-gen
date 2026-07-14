@@ -277,7 +277,8 @@ export class ChatConfigComponent implements OnInit {
     return true;
   }
   
-  onStartChat(): void {
+  async onStartChat(): Promise<void> {
+    console.log('onStartChat called, form valid:', this.isFormValid());
     if (this.isFormValid()) {
       // Save to localStorage
       localStorage.setItem('chat_agent_type', this.agentType);
@@ -286,13 +287,152 @@ export class ChatConfigComponent implements OnInit {
       localStorage.setItem('chat_api_key', this.apiKey);
       localStorage.setItem('chat_mock_mode', this.mockMode.toString());
       
-      this.configComplete.emit({
-        agentType: this.agentType,
-        llmProvider: this.llmProvider,
-        modelName: this.modelName,
-        apiKey: this.apiKey,
-        mockMode: this.mockMode
-      });
+      console.log('Calling startAgent...');
+      // Call agent start API
+      await this.startAgent();
+      this.emitConfigComplete();
+      
+      console.log('startAgent completed');
+    } else {
+      console.log('Form is not valid');
+    }
+  }
+  
+  async startAgent(): Promise<void> {
+    const { token, userId } = this.getUserInfo();
+    const urlParams = this.getUrlParams();
+    
+    try {
+      this.initializeChatThread(token, userId, urlParams);
+    } catch (error) {
+      console.error('Failed to initialize chat:', error);
+    }
+  }
+
+  private getUserInfo(): { token: string | null; userId: string } {
+    const token = localStorage.getItem('jwt_token');
+    const userStr = localStorage.getItem('user');
+    const user = userStr ? JSON.parse(userStr) : null;
+    const userId = (user?.id || 'user-local-dev').replace(/:/g, '-');
+    return { token, userId };
+  }
+
+  private getUrlParams(): { projectId: string | null; repositoryId: string | null; projectPath: string | null } {
+    const urlParams = new URLSearchParams(window.location.search);
+    return {
+      projectId: urlParams.get('project_id'),
+      repositoryId: urlParams.get('repository_id'),
+      projectPath: urlParams.get('project_path')
+    };
+  }
+
+  private async initializeChatThread(
+    token: string | null,
+    userId: string,
+    urlParams: { projectId: string | null; repositoryId: string | null; projectPath: string | null }
+  ): Promise<string | null> {
+    const response = await fetch('/api/chatkit/', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'X-User-Subject': userId
+      },
+      body: JSON.stringify({
+        message: 'Hi',
+        project_id: urlParams.projectId,
+        repository_id: urlParams.repositoryId,
+        project_path: urlParams.projectPath,
+        mock_mode: this.mockMode,
+        llm_provider: this.llmProvider,
+        model_name: this.modelName,
+        agent_type: this.agentType,
+        api_key: this.apiKey
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to initialize chat: ${response.status} ${errorText}`);
+    }
+
+    // Extract runId from stream
+    const body = response.body;
+    if (!body) {
+      return null;
+    }
+
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        const runId = this.extractRunIdFromLines(lines);
+        if (runId) {
+          // Update project with runId if projectId exists
+          if (urlParams.projectId) {
+            const projectStr = localStorage.getItem(`project_${urlParams.projectId}`);
+            if (projectStr) {
+              try {
+                const project = JSON.parse(projectStr);
+                project.thread_id = runId;
+                localStorage.setItem(`project_${urlParams.projectId}`, JSON.stringify(project));
+                console.log(`Updated project ${urlParams.projectId} with run_id ${runId}`);
+              } catch (e) {
+                console.error('Failed to update project object in localStorage:', e);
+              }
+            }
+          }
+          return runId;
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    return null;
+  }
+
+  private emitConfigComplete(): void {
+    console.log('Emitting configComplete event');
+    this.configComplete.emit({
+      agentType: this.agentType,
+      llmProvider: this.llmProvider,
+      modelName: this.modelName,
+      apiKey: this.apiKey,
+      mockMode: this.mockMode
+    });
+    console.log('configComplete event emitted');
+  }
+
+  private extractRunIdFromLines(lines: string[]): string | null {
+    for (const line of lines) {
+      const trimmedLine = line.trim();
+      if (trimmedLine.startsWith('data: ')) {
+        const runId = this.parseSSELineForRunId(trimmedLine);
+        if (runId) {
+          return runId;
+        }
+      }
+    }
+    return null;
+  }
+
+  private parseSSELineForRunId(line: string): string | null {
+    try {
+      const data = JSON.parse(line.slice(6));
+      return data.thread_id || data.run_id || null;
+    } catch (e) {
+      console.debug('Failed to parse SSE line:', line);
+      return null;
     }
   }
 }

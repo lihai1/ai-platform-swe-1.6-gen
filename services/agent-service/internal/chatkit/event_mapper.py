@@ -168,6 +168,7 @@ def progress_from_event(event: dict[str, Any]) -> ProgressUpdateEvent:
         "testing",
         "reviewing",
         "verifying",
+        "reasoning",
     }:
         state_text = {
             "created": "Initializing workflow",
@@ -179,6 +180,7 @@ def progress_from_event(event: dict[str, Any]) -> ProgressUpdateEvent:
             "testing": "Running tests",
             "reviewing": "Reviewing changes",
             "verifying": "Verifying results",
+            "reasoning": "Reasoning",
         }.get(event_type, event_type.replace("_", " ").title())
         
         return ProgressUpdateEvent(

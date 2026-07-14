@@ -60,6 +60,7 @@ class ProcessRunner:
         self._input_event: Optional[asyncio.Event] = None
         self._pending_input: Optional[str] = None
         self._full_output: list[str] = []
+        self._process_started: bool = False
 
     async def run(self) -> None:
         """Run the command and stream events until completion."""
@@ -94,6 +95,7 @@ class ProcessRunner:
                 "cwd": str(self.cwd),
             },
         )
+        self._process_started = True
 
         try:
             await self._read_loop()
@@ -144,11 +146,6 @@ class ProcessRunner:
                         else:
                             await self._flush_buffer(buffer)
                             buffer = ""
-                if self._pending_input and self.child and self.child.isalive():
-                    await self._send_input(self._pending_input)
-                    self._pending_input = None
-                    if self._input_event:
-                        self._input_event.set()
 
         # Collect remaining output
         try:
@@ -274,9 +271,29 @@ class ProcessRunner:
             logger.warning("Received user_input event without text: %s", data)
             return
         logger.info("Received user input for run %s", self.nats.run_id)
-        self._pending_input = user_input
-        self._input_event = asyncio.Event()
-        await self._input_event.wait()
+        
+        # Check if process is still running
+        if not self.child or not self.child.isalive():
+            if self._process_started:
+                # Process already ran and completed
+                logger.warning("Process already completed, cannot send more input")
+                await self.nats.publish_chat(
+                    "final_answer",
+                    {"message": "The agent has completed its task. Please start a new conversation."}
+                )
+                return
+            else:
+                # Process never started, start it now
+                logger.info("Process not started yet, starting...")
+                await self.run()
+                return
+        
+        # Process is running, send input directly
+        self.child.sendline(user_input)
+        await self.nats.publish_state(
+            "output",
+            {"data": f"{user_input}\n", "stream": "stdin"},
+        )
 
     async def cancel(self) -> None:
         """Cancel the running process."""

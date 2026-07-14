@@ -9,6 +9,23 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
+async def _get_graph_for_run(payload, worker, checkpointer, agent_type=None):
+    """Return the compiled graph for this run, preferring the worker's stored graph."""
+    if worker and getattr(worker, "graph", None):
+        return worker.graph
+    if worker and getattr(worker, "agent_type", None):
+        agent_type = worker.agent_type
+    elif payload and payload.get("agent_type"):
+        agent_type = payload.get("agent_type")
+    if not agent_type:
+        agent_type = os.environ.get("AGENT_TYPE", "specialist")
+    if agent_type == "single-agent":
+        from internal.agents.single_agent.graph import create_single_agent_graph
+        return create_single_agent_graph(checkpointer)
+    from internal.agents.specialist.graph import create_specialist_agent_graph
+    return create_specialist_agent_graph(checkpointer)
+
+
 async def handle_command(command: dict, handle_run_start_func) -> None:
     """Handle incoming command"""
     command_type = command.get("command_type")
@@ -42,10 +59,18 @@ async def handle_run_start(run_id: str, payload: dict, create_run_func, get_chec
         llm_provider = payload.get("llm_provider") or os.getenv("LLM_PROVIDER")
         logger.info(f"[WORKER] Mock mode: {mock_mode}, LLM provider: {llm_provider}")
 
+        # Determine agent type from worker, payload, or environment
+        agent_type = "specialist"
+        if worker and getattr(worker, "agent_type", None):
+            agent_type = worker.agent_type
+        elif payload and payload.get("agent_type"):
+            agent_type = payload.get("agent_type")
+        elif os.environ.get("AGENT_TYPE"):
+            agent_type = os.environ.get("AGENT_TYPE")
+
         # Create and store graph in worker if worker instance provided
         if worker:
-            from internal.workflow.specialist_agent_graph import create_specialist_agent_graph
-            worker.graph = create_specialist_agent_graph(checkpointer)
+            worker.graph = await _get_graph_for_run(payload, worker, checkpointer, agent_type=agent_type)
             logger.info(f"[WORKER] Graph instance stored in worker for run {run_id}")
 
         # Execute the workflow
@@ -60,6 +85,7 @@ async def handle_run_start(run_id: str, payload: dict, create_run_func, get_chec
             "max_repair_count": payload.get("max_repair_count", 2),
             "mock_mode": mock_mode,
             "llm_provider": llm_provider,
+            "agent_type": agent_type,
         }, checkpointer)
         
         logger.info(f"[WORKER] Run for run {run_id} completed with status {result.get('status')}")
@@ -105,18 +131,17 @@ async def resume_workflow_with_approval(run_id: str, decision: str, payload: dic
         worker: Optional worker instance with stored graph
     """
     from internal.workflow.checkpointer import get_checkpointer
-    from internal.workflow.specialist_agent_graph import create_specialist_agent_graph
     
     logger.info(f"[WORKER] Resuming workflow for run {run_id} with decision: {decision}")
     
     try:
         # Use stored graph instance if available
-        if worker and worker.graph:
+        if worker and getattr(worker, "graph", None):
             graph = worker.graph
             logger.info(f"[WORKER] Using stored graph instance for run {run_id}")
         else:
             checkpointer = await get_checkpointer()
-            graph = create_specialist_agent_graph(checkpointer)
+            graph = await _get_graph_for_run(payload, worker, checkpointer)
             logger.info(f"[WORKER] Created new graph instance for run {run_id}")
         
         # Get current state from checkpointer
@@ -162,7 +187,6 @@ async def trigger_agent_with_prompt(run_id: str, payload: dict, worker=None) -> 
         worker: Optional worker instance with stored graph
     """
     from internal.workflow.checkpointer import get_checkpointer
-    from internal.workflow.specialist_agent_graph import create_specialist_agent_graph
     from internal.messaging.nats import get_nats_client
     
     logger.info(f"[WORKER] Triggering agent with prompt for run {run_id}")
@@ -203,17 +227,7 @@ async def trigger_agent_with_prompt(run_id: str, payload: dict, worker=None) -> 
             else:
                 logger.info(f"[WORKER] Path {full_path} is not a CrewAI project, falling back to LangGraph")
         
-        # Use stored graph instance if available
-        if worker and worker.graph:
-            graph = worker.graph
-            logger.info(f"[WORKER] Using stored graph instance for run {run_id}")
-        else:
-            from internal.workflow.specialist_agent_graph import create_specialist_agent_graph
-            checkpointer = await get_checkpointer()
-            graph = create_specialist_agent_graph(checkpointer)
-            logger.info(f"[WORKER] Created new graph instance for run {run_id}")
-        
-        # Get current state from checkpointer
+        # Get current state from checkpointer first (to determine agent type and update state)
         config = {"configurable": {"thread_id": run_id}}
         checkpointer = await get_checkpointer()
         current_state = await checkpointer.aget(config)
@@ -226,13 +240,24 @@ async def trigger_agent_with_prompt(run_id: str, payload: dict, worker=None) -> 
         state_values = current_state.values if hasattr(current_state, 'values') else current_state
         updated_state = dict(state_values)
         
-        # Add new prompt to messages
+        # Add new prompt to messages and update the active task
         prompt_content = payload.get("content") or payload.get("input", "")
         if prompt_content:
             messages = updated_state.get("messages", [])
             messages.append({"role": "user", "content": prompt_content})
             updated_state["messages"] = messages
+            previous_task = updated_state.get("task", "")
+            updated_state["task"] = previous_task + "\n\nUser: " + prompt_content if previous_task else prompt_content
             logger.info(f"[WORKER] Added new prompt to messages: {prompt_content}")
+        
+        # Get the right graph for this run
+        agent_type = updated_state.get("agent_type")
+        if worker and getattr(worker, "graph", None):
+            graph = worker.graph
+            logger.info(f"[WORKER] Using stored graph instance for run {run_id}")
+        else:
+            graph = await _get_graph_for_run(payload, worker, checkpointer, agent_type=agent_type)
+            logger.info(f"[WORKER] Created new graph instance for run {run_id}")
         
         # Trigger execution using existing graph
         result = await graph.ainvoke(updated_state, config)

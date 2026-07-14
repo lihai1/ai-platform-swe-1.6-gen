@@ -119,4 +119,6 @@ async def reasoning_node(state: EngineeringState) -> EngineeringState:
         error_text = reasoning_results.get("answer", f"Task failed: {first_error}")
         await publish_chat_event(state["run_id"], state["user_id"], "final_answer", {"content": error_text, "error": True, "errors": errors, "status": "failed"})
 
+    state["status"] = "COMPLETED"
+    state["current_phase"] = "COMPLETED"
     return state

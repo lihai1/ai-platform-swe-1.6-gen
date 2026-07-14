@@ -36,12 +36,6 @@ describe('ChatComponent', () => {
     expect(component.repositoryId).toBe('test-repo');
   });
 
-  it('should load ChatKit script on after view init', () => {
-    const loadSpy = spyOn(component as any, 'loadChatKit');
-    component.ngAfterViewInit();
-    expect(loadSpy).toHaveBeenCalled();
-  });
-
   it('should handle missing query params', () => {
     TestBed.resetTestingModule();
     TestBed.configureTestingModule({

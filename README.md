@@ -93,6 +93,33 @@ make compose-down
 make mock-llm-start
 ```
 
+### Development Mode (Run Services Locally)
+
+**Use this for testing changed code locally** - run specific services locally while others run in docker-compose:
+
+```bash
+# Run web UI locally, other services in docker-compose
+make start-local SERVICES=web
+
+# Run web and agent-service locally, others in docker-compose
+make start-local SERVICES=web,agent-service
+
+# Run control-plane locally, others in docker-compose
+make start-local SERVICES=control-plane
+```
+
+To stop the locally running services:
+
+```bash
+# Stop web service running locally
+make stop-local SERVICES=web
+
+# Stop multiple local services
+make stop-local SERVICES=web,agent-service
+```
+
+The `start-local` target automatically starts the specified services locally in the background while docker-compose services run in containers. This provides faster development iteration with hot-reload for local services, making it ideal for testing code changes without rebuilding containers. The `stop-local` target safely stops only the locally running services by targeting processes in their specific working directories.
+
 This will start:
 - PostgreSQL on port 5433
 - Control Plane API on port 8080
@@ -219,6 +246,21 @@ This platform is implemented as a **monorepo with 4 microservices**:
 - **Agent Worker** (Python): CrewAI-based worker for isolated LangGraph workflow execution, communicating only via NATS. See [services/agent-worker/README.md](services/agent-worker/README.md).
 - **Web UI** (Angular): Angular 22+ application with standalone components. All API requests routed through agent-service proxy.
 
+### System Flow
+
+```mermaid
+graph LR
+    UI[Angular UI] --> AgentService[Agent Service]
+    AgentService --> NATS[NATS]
+    NATS --> ControlPlane[Control Plane]
+    ControlPlane --> Worker[Agent Worker]
+    Worker --> NATS
+    NATS --> AgentService
+    AgentService --> UI
+    AgentService --> DB[(PostgreSQL)]
+    ControlPlane --> DB
+```
+
 ### Scalability Considerations
 
 The current 4-service architecture is designed for the POC and personal-use scenarios. When reaching higher scalability goals, certain responsibilities should be divided into additional microservices:
@@ -300,16 +342,12 @@ ai-agents-platform/
 
 ## Screenshots
 
-### UI
-
-![Chat Interface](docs/screenshots/chat.png)
-![Project Selection](docs/screenshots/projects.png)
-
 ### Architecture Diagrams
 
 ![Architecture Component Diagram](docs/svg/architecture-component-diagram.svg)
 
-![Chat Lifecycle Sequence](docs/svg/sequence-chat-lifecycle.svg)
+### NATS Messaging Sequence
+
 
 ![NATS Messaging Sequence](docs/svg/sequence-nats-messaging.svg)
 
@@ -327,7 +365,8 @@ See service-specific READMEs for local development instructions.
 - **Infrastructure:** Kubernetes, Docker, Helm, Linux, Azure, AWS
 - **Messaging & Data:** NATS, Kafka, PostgreSQL
 - **APIs:** gRPC, REST, Protobuf, OpenAPI
-- **Automation & CI/CD:** Jenkins, Git, Makefiles, CI/CD Pipelines
+- **Build & Automation:** Jenkins, Git, Makefiles, CI/CD Pipelines
+- **AI & Security:** Agentic AI, AI Coding Agents, MCP Concepts, Policy-Gated Workflows, Scoped Access, Secrets/SSH Key Handling, Claude
 - **Practices:** System Design, TDD, E2E Testing, PR Quality Gates, Production Stability
 
 - Email: lihai2511@gmail.com

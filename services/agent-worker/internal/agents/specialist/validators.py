@@ -1,7 +1,7 @@
 """Validation agents for testing, review, and verification"""
 from abc import ABC
 from typing import Dict, Any, List, Optional, ClassVar
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.agents import create_agent
 from langchain_core.tools import tool
 from internal.agents.schemas import TestResult, ReviewResult, ReviewFinding, VerificationResult, CriterionResult
@@ -163,12 +163,16 @@ class BaseValidationAgent(ABC):
             include_run_command=False,
         )
 
-    async def _run_agent(self, prompt: ChatPromptTemplate, tools: list, invoke_kwargs: Dict[str, Any]) -> dict | None:
+    async def _run_agent(self, system_prompt: str, tools: list, invoke_kwargs: Dict[str, Any]) -> dict | None:
         """Create the agent, invoke it and return the result, or None on failure."""
         self._last_error = ""
-        agent = create_agent(self.model, tools, system_prompt=prompt)
+        graph = create_agent(
+            model=self.model,
+            tools=tools,
+            system_prompt=system_prompt,
+        )
         try:
-            return await agent.ainvoke(invoke_kwargs)
+            return await graph.ainvoke(invoke_kwargs)
         except Exception as e:
             self._last_error = str(e)
             logger.error("%s failed: %s", self.agent_name, self._last_error)
@@ -191,8 +195,7 @@ class BackendTestEngineerAgent(BaseValidationAgent):
         """Run backend tests"""
         self._initialize_run(run_id, workspace_tools)
 
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a backend test engineer agent. Your job is to execute and analyze test results.
+        system_prompt = """You are a backend test engineer agent. Your job is to execute and analyze test results.
 
 Analyze the test output and provide:
 - Total number of tests run
@@ -201,21 +204,23 @@ Analyze the test output and provide:
 - Number of tests skipped
 - Code coverage percentage if available
 - Full test output
-- List of failed test names"""),
-            ("human", """Task: {task}
-
-Implementation Plan:
-{implementation_plan}
-
-Run the tests and analyze the results.""")
-        ])
+- List of failed test names"""
 
         tools = self._build_workspace_tools(workspace_id, workspace_tools, include_run_tests=True)
         invoke_kwargs = {
-            "task": task,
-            "implementation_plan": json.dumps(implementation_plan, indent=2),
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"""Task: {task}
+
+Implementation Plan:
+{json.dumps(implementation_plan, indent=2)}
+
+Run the tests and analyze the results."""
+                }
+            ]
         }
-        result = await self._run_agent(prompt, tools, invoke_kwargs)
+        result = await self._run_agent(system_prompt, tools, invoke_kwargs)
 
         if result is None:
             return TestResult(
@@ -246,8 +251,7 @@ class AngularTestEngineerAgent(BaseValidationAgent):
         """Run Angular tests"""
         self._initialize_run(run_id, workspace_tools)
 
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are an Angular test engineer agent. Your job is to execute and analyze Angular test results.
+        system_prompt = """You are an Angular test engineer agent. Your job is to execute and analyze Angular test results.
 
 Analyze the test output and provide:
 - Total number of tests run
@@ -256,21 +260,23 @@ Analyze the test output and provide:
 - Number of tests skipped
 - Code coverage percentage if available
 - Full test output
-- List of failed test names"""),
-            ("human", """Task: {task}
-
-Implementation Plan:
-{implementation_plan}
-
-Run the Angular tests and analyze the results.""")
-        ])
+- List of failed test names"""
 
         tools = self._build_workspace_tools(workspace_id, workspace_tools, include_run_tests=True)
         invoke_kwargs = {
-            "task": task,
-            "implementation_plan": json.dumps(implementation_plan, indent=2),
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"""Task: {task}
+
+Implementation Plan:
+{json.dumps(implementation_plan, indent=2)}
+
+Run the Angular tests and analyze the results."""
+                }
+            ]
         }
-        result = await self._run_agent(prompt, tools, invoke_kwargs)
+        result = await self._run_agent(system_prompt, tools, invoke_kwargs)
 
         if result is None:
             return TestResult(
@@ -302,8 +308,7 @@ class CodeReviewerAgent(BaseValidationAgent):
         """Review code changes"""
         self._initialize_run(run_id, workspace_tools)
 
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a code reviewer agent. Your job is to review code changes for correctness, maintainability, security, and best practices.
+        system_prompt = """You are a code reviewer agent. Your job is to review code changes for correctness, maintainability, security, and best practices.
 
 Provide review findings with severity levels:
 - blocking: Must be fixed before merge
@@ -318,25 +323,26 @@ Your review should cover:
 - Code style and readability
 - Error handling
 - Test coverage
-- Documentation"""),
-            ("human", """Task: {task}
+- Documentation"""
+
+        tools = self._build_workspace_tools(workspace_id, workspace_tools, include_git_diff=True)
+        invoke_kwargs = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"""Task: {task}
 
 Implementation Plan:
-{implementation_plan}
+{json.dumps(implementation_plan, indent=2)}
 
 Code Diff:
 {code_diff}
 
-Review the changes and provide findings.""")
-        ])
-
-        tools = self._build_workspace_tools(workspace_id, workspace_tools, include_git_diff=True)
-        invoke_kwargs = {
-            "task": task,
-            "implementation_plan": json.dumps(implementation_plan, indent=2),
-            "code_diff": code_diff,
+Review the changes and provide findings."""
+                }
+            ]
         }
-        result = await self._run_agent(prompt, tools, invoke_kwargs)
+        result = await self._run_agent(system_prompt, tools, invoke_kwargs)
 
         if result is None:
             return ReviewResult(
@@ -372,8 +378,7 @@ class CompletionVerifierAgent(BaseValidationAgent):
         """Verify completion against acceptance criteria"""
         self._initialize_run(run_id, workspace_tools)
 
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a completion verifier agent. Your job is to verify that the implementation meets all acceptance criteria.
+        system_prompt = """You are a completion verifier agent. Your job is to verify that the implementation meets all acceptance criteria.
 
 For each acceptance criterion:
 - Determine if it was met (passed/failed)
@@ -381,33 +386,32 @@ For each acceptance criterion:
 
 Your final decision should be:
 - accepted: All criteria are met
-- rejected: One or more criteria are not met"""),
-            ("human", """Task: {task}
-
-Implementation Plan:
-{implementation_plan}
-
-Acceptance Criteria:
-{acceptance_criteria}
-
-Test Results:
-{test_results}
-
-Review Results:
-{review_results}
-
-Verify completion against the acceptance criteria.""")
-        ])
+- rejected: One or more criteria are not met"""
 
         tools = self._build_workspace_tools(workspace_id, workspace_tools, include_git_status=True, include_git_diff=True)
         invoke_kwargs = {
-            "task": task,
-            "implementation_plan": json.dumps(implementation_plan, indent=2),
-            "acceptance_criteria": json.dumps(implementation_plan.get("acceptance_criteria", []), indent=2),
-            "test_results": test_results.model_dump_json(indent=2),
-            "review_results": review_results.model_dump_json(indent=2),
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"""Task: {task}
+
+Implementation Plan:
+{json.dumps(implementation_plan, indent=2)}
+
+Acceptance Criteria:
+{json.dumps(implementation_plan.get("acceptance_criteria", []), indent=2)}
+
+Test Results:
+{test_results.model_dump_json(indent=2)}
+
+Review Results:
+{review_results.model_dump_json(indent=2)}
+
+Verify completion against the acceptance criteria."""
+                }
+            ]
         }
-        result = await self._run_agent(prompt, tools, invoke_kwargs)
+        result = await self._run_agent(system_prompt, tools, invoke_kwargs)
 
         if result is None:
             return VerificationResult(

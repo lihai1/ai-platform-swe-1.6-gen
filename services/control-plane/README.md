@@ -21,6 +21,19 @@ Go control plane service for the agentic engineering platform. Manages users, or
 
 ### Development
 
+#### Local Development (with docker-compose services)
+
+**Use this for testing changed code locally** - run the control-plane locally while other services run in docker-compose:
+
+```bash
+# From the project root, this starts control-plane locally and other services in docker-compose
+make start-local SERVICES=control-plane
+```
+
+The control-plane will automatically start in the background with hot-reload enabled, making it ideal for testing code changes without rebuilding containers.
+
+#### Standalone Development
+
 1. Start PostgreSQL:
 ```bash
 docker-compose up -d postgres

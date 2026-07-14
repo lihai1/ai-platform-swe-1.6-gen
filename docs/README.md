@@ -2,16 +2,18 @@
 
 This directory contains UML and sequence diagrams for the SWE-1.6 Agentic Engineering Platform.
 
-## Component Diagram
+## Component Diagrams
 
 - **`architecture-component-diagram.mmd`** - High-level system architecture showing all components and their interactions
-  - Client Layer (Angular Web UI)
-  - API Layer (Go Control Plane, Python Agent API)
+  - Client Layer (Angular Web UI - single entry point via Agent Service)
+  - API Layer (Go Control Plane for resource management/container orchestration, Python Agent Service for proxy/auth/chatkit)
   - Worker Layer (CrewAI-based Python Agent Worker)
   - Messaging Layer (NATS JetStream with durable consumers)
-  - Data Layer (PostgreSQL, LangSmith)
+  - Data Layer (PostgreSQL)
   - Execution Layer (Docker Workspaces)
   - External Services (OpenAI, Anthropic, Ollama)
+
+- **`architecture-simple-flow.mmd`** - Simplified flow diagram showing the core request/event flow between components
 
 ## Sequence Diagrams
 
@@ -112,6 +114,23 @@ The platform follows a microservices architecture with a single entry point patt
 
 The architecture and components described above are implemented and runnable. `make clean-start` demonstrates the full chat-to-container flow, and the worker now clones the selected repository into `/workspace` before the workflow starts. A custom CrewAI wrapper worker type discovers available agent projects and surfaces them in the chat session, so the user can pick which multi-agent project to run. The implementation is **demo-ready** rather than production-ready for personal projects.
 
+### Development Mode
+
+**Use this for testing changed code locally** - run specific services locally while others run in docker-compose using the `start-local` makefile target:
+
+```bash
+# Run web UI locally, other services in docker-compose
+make start-local SERVICES=web
+
+# Run web and agent-service locally, others in docker-compose
+make start-local SERVICES=web,agent-service
+
+# Run control-plane locally, others in docker-compose
+make start-local SERVICES=control-plane
+```
+
+The target automatically starts the specified services locally in the background while docker-compose services run in containers. This provides faster development iteration with hot-reload for local services, making it ideal for testing code changes without rebuilding containers, while infrastructure services (PostgreSQL, NATS) continue running in containers.
+
 **First goal:** Orchestrate agentic AI workflows in controlled isolated environments with secured remote controls, full open-source usage, and free local LLMs.
 
 **Personal-use goal:** A single-user home instance that can run a real repository-based engineering workflow, show live progress, and wait for user approval before destructive actions.
@@ -145,6 +164,7 @@ The architecture and components described above are implemented and runnable. `m
 
 The Mermaid source files are available in the `docs/` directory for editing:
 - [architecture-component-diagram.mmd](architecture-component-diagram.mmd)
+- [architecture-simple-flow.mmd](architecture-simple-flow.mmd)
 - [sequence-chat-lifecycle.mmd](sequence-chat-lifecycle.mmd)
 - [sequence-chatkit-chat.mmd](sequence-chatkit-chat.mmd)
 - [sequence-workflow-trigger.mmd](sequence-workflow-trigger.mmd)
@@ -166,6 +186,7 @@ npx @mermaid-js/mermaid-cli --version
 
 # Regenerate all diagrams
 npx @mermaid-js/mermaid-cli -i architecture-component-diagram.mmd -o svg/architecture-component-diagram.svg
+npx @mermaid-js/mermaid-cli -i architecture-simple-flow.mmd -o svg/architecture-simple-flow.svg
 npx @mermaid-js/mermaid-cli -i sequence-chat-lifecycle.mmd -o svg/sequence-chat-lifecycle.svg
 npx @mermaid-js/mermaid-cli -i sequence-chatkit-chat.mmd -o svg/sequence-chatkit-chat.svg
 npx @mermaid-js/mermaid-cli -i sequence-workflow-trigger.mmd -o svg/sequence-workflow-trigger.svg

@@ -6,6 +6,7 @@ import json
 import logging
 import signal
 import sys
+from pathlib import Path
 from typing import Optional
 
 from agent_worker.bootstrap import (
@@ -30,6 +31,9 @@ class CrewAIWorker:
         self.nats: Optional[CrewAINatsClient] = None
         self.runner: Optional[ProcessRunner] = None
         self._shutting_down = False
+        self._awaiting_project_selection = False
+        self._resolved_folder: Optional[Path] = None
+        self._command: Optional[str] = None
 
     async def start(self) -> None:
         """Connect to NATS and start the run."""
@@ -56,61 +60,29 @@ class CrewAIWorker:
         await self.nats.publish_control_ready()
 
         # Resolve runnable folder and command
-        try:
-            resolved_folder = resolve_runnable_folder(
-                self.config.folder,
-                self.config.example,
-            )
-            command = self.config.command or detect_command(resolved_folder)
-        except BootstrapError as e:
-            logger.error("Bootstrap failed: %s", e.message)
-            
-            # If no runnable folder found, scan for CrewAI projects
-            if e.reason == "no_runnable_folder":
-                logger.info("Scanning workspace for CrewAI projects...")
-                crewai_projects = find_crewai_projects_recursive(WORKSPACE_ROOT)
-                
-                if crewai_projects:
-                    logger.info("Found %d CrewAI projects", len(crewai_projects))
-                    await self._publish_crewai_projects(crewai_projects)
-                else:
-                    logger.info("No CrewAI projects found in workspace")
-                    await self._publish_bootstrap_error(e)
-            else:
-                await self._publish_bootstrap_error(e)
-            return
-
-        logger.info("Resolved folder: %s", resolved_folder)
-        logger.info("Resolved command: %s", command)
-
-        # Start process runner
-        self.runner = ProcessRunner(
-            nats=self.nats,
-            command=command,
-            cwd=resolved_folder,
-            input_idle_seconds=self.config.input_idle_seconds,
-            output_max_buffer_chars=self.config.output_max_buffer_chars,
-            command_timeout=self.config.command_timeout_seconds,
-        )
-
-        # Handle signals
-        loop = asyncio.get_running_loop()
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            try:
-                loop.add_signal_handler(sig, lambda: asyncio.create_task(self.stop()))
-            except Exception:
-                pass
-
-        try:
-            await self.runner.run()
-        finally:
-            await self.stop()
+        bootstrap_success = await self._attempt_bootstrap()
+        
+        if bootstrap_success:
+            # Bootstrap succeeded, start the runner
+            await self._start_runner()
+        
+        # If we're awaiting project selection, keep worker alive
+        if self._awaiting_project_selection:
+            logger.info("Worker waiting for project selection...")
+            # Keep the event loop running to receive user events
+            while self._awaiting_project_selection and not self._shutting_down:
+                await asyncio.sleep(1)
 
     async def _handle_user_event(self, data: dict) -> None:
         """Dispatch user input events to the runner."""
         event_type = data.get("type") or data.get("event_type")
         if event_type in ("user_input", "prompt"):
-            if self.runner:
+            # If awaiting project selection, try to resolve the selected project
+            if self._awaiting_project_selection:
+                user_input = data.get("payload", {}).get("input", "")
+                logger.info("Received project selection: %s", user_input)
+                await self._retry_bootstrap_with_selection(user_input)
+            elif self.runner:
                 await self.runner.handle_user_input(data)
         else:
             logger.info("Ignoring user event type: %s", event_type)
@@ -168,6 +140,98 @@ class CrewAIWorker:
                 projects=projects,
             )["payload"],
         )
+
+    async def _attempt_bootstrap(self) -> bool:
+        """Attempt to bootstrap the worker. Returns True if successful."""
+        try:
+            self._resolved_folder = resolve_runnable_folder(
+                self.config.folder,
+                self.config.example,
+            )
+            self._command = self.config.command or detect_command(self._resolved_folder)
+            logger.info("Resolved folder: %s", self._resolved_folder)
+            logger.info("Resolved command: %s", self._command)
+            return True
+        except BootstrapError as e:
+            logger.error("Bootstrap failed: %s", e.message)
+            return await self._handle_bootstrap_failure(e)
+    
+    async def _handle_bootstrap_failure(self, error: BootstrapError) -> bool:
+        """Handle bootstrap failure. Returns True if should retry."""
+        if error.reason == "no_runnable_folder":
+            logger.info("Scanning workspace for CrewAI projects...")
+            crewai_projects = find_crewai_projects_recursive(WORKSPACE_ROOT)
+            
+            if crewai_projects:
+                logger.info("Found %d CrewAI projects", len(crewai_projects))
+                await self._publish_crewai_projects(crewai_projects)
+                self._awaiting_project_selection = True
+                logger.info("Waiting for user to select a project...")
+                return False  # Don't retry, wait for user input
+            else:
+                logger.info("No CrewAI projects found in workspace")
+                await self._publish_bootstrap_error(error)
+                return False
+        else:
+            await self._publish_bootstrap_error(error)
+            return False
+    
+    async def _start_runner(self) -> None:
+        """Initialize and start the process runner."""
+        if not self._resolved_folder or not self._command:
+            logger.error("Cannot start runner: folder or command not resolved")
+            return
+        
+        self.runner = ProcessRunner(
+            nats=self.nats,
+            command=self._command,
+            cwd=self._resolved_folder,
+            input_idle_seconds=self.config.input_idle_seconds,
+            output_max_buffer_chars=self.config.output_max_buffer_chars,
+            command_timeout=self.config.command_timeout_seconds,
+        )
+        
+        self._setup_signal_handlers()
+        
+        try:
+            await self.runner.run()
+        finally:
+            await self.stop()
+    
+    def _setup_signal_handlers(self) -> None:
+        """Setup signal handlers for graceful shutdown."""
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                loop.add_signal_handler(sig, lambda: asyncio.create_task(self.stop()))
+            except Exception:
+                pass
+
+    async def _retry_bootstrap_with_selection(self, example_path: str) -> None:
+        """Retry bootstrap with user-selected project path."""
+        logger.info("Retrying bootstrap with selected path: %s", example_path)
+
+        try:
+            self._resolved_folder = resolve_runnable_folder(
+                self.config.folder,
+                example_path,
+            )
+            self._command = self.config.command or detect_command(self._resolved_folder)
+
+            logger.info("Successfully resolved folder: %s", self._resolved_folder)
+            logger.info("Resolved command: %s", self._command)
+
+            # Clear awaiting state
+            self._awaiting_project_selection = False
+            
+            # Start the runner
+            await self._start_runner()
+
+        except BootstrapError as e:
+            logger.error("Bootstrap retry failed: %s", e.message)
+            await self._publish_bootstrap_error(e)
+            # Keep awaiting state true to allow another selection attempt
+            self._awaiting_project_selection = True
 
     async def stop(self) -> None:
         """Stop the worker and close NATS."""

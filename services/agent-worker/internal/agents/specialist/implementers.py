@@ -1,11 +1,12 @@
 """Implementation agents for Go, Angular, and DevOps"""
 from abc import ABC
 from typing import Dict, Any, Optional, List, ClassVar
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.agents import create_agent
 from langchain_core.tools import tool
 from internal.agents.schemas import ImplementationResult
 from internal.agents.model_factory import get_model
+from internal.agents.code_guidelines import load_code_guidelines
 from internal.tools.workspace import WorkspaceTools
 from internal.tools.agent_tools import create_workspace_tools, create_web_search_tools
 from internal.agents.result_parsers import parse_implementation_result
@@ -47,6 +48,7 @@ class BaseImplementationAgent(ABC):
         self.model = get_model(model_name=model_name, mock_mode=mock_mode, llm_provider=llm_provider)
         self.mock_mode = mock_mode
         self.llm_provider = llm_provider
+        self._code_guidelines = load_code_guidelines()
 
     def _initialize_run(self, run_id: Optional[str], workspace_tools: WorkspaceTools) -> None:
         """Initialize workspace tools with the run_id for event publishing."""
@@ -56,9 +58,13 @@ class BaseImplementationAgent(ABC):
     def _build_prompt(self) -> ChatPromptTemplate:
         """Build the ChatPromptTemplate from the agent's system prompt and task call."""
         human_prompt = _HUMAN_IMPLEMENTATION_TEMPLATE.replace("{task_call}", self.task_call)
+        system_prompt = self.system_prompt
+        if self._code_guidelines:
+            system_prompt += self._code_guidelines
         return ChatPromptTemplate.from_messages([
-            ("system", self.system_prompt),
+            ("system", system_prompt),
             ("human", human_prompt),
+            ("placeholder", "{agent_scratchpad}"),
         ])
 
     def _build_implementation_tools(self, workspace_id: str, workspace_tools: WorkspaceTools) -> list:
@@ -80,12 +86,21 @@ class BaseImplementationAgent(ABC):
 
         return tools
 
-    async def _execute_agent(self, agent, task: str, implementation_plan: Dict[str, Any], repository_summary: Dict[str, Any]) -> ImplementationResult:
+    async def _execute_agent(self, graph, task: str, implementation_plan: Dict[str, Any], repository_summary: Dict[str, Any]) -> ImplementationResult:
         """Run the agent and parse the result."""
-        result = await agent.ainvoke({
-            "task": task,
-            "implementation_plan": json.dumps(implementation_plan, indent=2),
-            "repository_summary": json.dumps(repository_summary, indent=2),
+        result = await graph.ainvoke({
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"""Task: {task}
+
+Implementation Plan:
+{json.dumps(implementation_plan, indent=2)}
+
+Repository Summary:
+{json.dumps(repository_summary, indent=2)}"""
+                }
+            ]
         })
         return parse_implementation_result(result)
 
@@ -102,11 +117,15 @@ class BaseImplementationAgent(ABC):
         self._initialize_run(run_id, workspace_tools)
 
         tools = self._build_implementation_tools(workspace_id, workspace_tools)
-        prompt = self._build_prompt()
-        agent = create_agent(self.model, tools, system_prompt=prompt)
+        system_prompt = self._build_prompt()
+        graph = create_agent(
+            model=self.model,
+            tools=tools,
+            system_prompt=system_prompt,
+        )
 
         try:
-            return await self._execute_agent(agent, task, implementation_plan, repository_summary)
+            return await self._execute_agent(graph, task, implementation_plan, repository_summary)
         except Exception as e:
             logger.error("%s failed: %s", self.agent_name, e)
             return ImplementationResult(

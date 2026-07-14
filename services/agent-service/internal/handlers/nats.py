@@ -4,42 +4,6 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-# Global ChatKit client for local agent-service
-chatkit_client = None
-
-
-class LocalChatKitClient:
-    """Local ChatKit client for agent-service (custom ChatKit server)"""
-    class Messages:
-        def __init__(self, store):
-            self.store = store
-        
-        async def create(self, thread_id: str, content: str, role: str):
-            """Create message in local PostgreSQL store"""
-            try:
-                await self.store.add_message(thread_id, role, content)
-                logger.info(f"Local ChatKit: Created message in PostgreSQL store for thread {thread_id}")
-            except Exception as e:
-                logger.error(f"Local ChatKit: Failed to create message: {e}")
-    
-    def __init__(self, store):
-        self.store = store
-        self.chatkit = type('ChatKit', (), {'messages': self.Messages(store)})()
-
-
-def get_chatkit_client():
-    """Get or create local ChatKit client"""
-    global chatkit_client
-    if chatkit_client is None:
-        # agent-service acts as custom ChatKit server, always use local PostgreSQL store
-        from internal.chatkit.store import PostgreSQLStore
-        from internal.db import AsyncSessionLocal
-        store = PostgreSQLStore(AsyncSessionLocal)
-        chatkit_client = LocalChatKitClient(store)
-        logger.info("Using local ChatKit client (agent-service as custom ChatKit server)")
-    
-    return chatkit_client
-
 
 async def handle_agent_state_event(event: dict, push_event_func) -> None:
     """Handle agent state events and push to SSE streams"""
@@ -62,48 +26,6 @@ async def handle_agent_state_event(event: dict, push_event_func) -> None:
         })
         logger.info(f"Pushed event to SSE stream for run {run_id}")
     
-    # Create ChatKit message based on event type using ChatKit library
-    if run_id and event_type in ["created", "preparing_workspace", "scouting", "planning", "designing", "implementing", "testing", "reviewing", "verifying", "waiting_input", "completed", "failed", "final_answer", "progress_update"]:
-        try:
-            client = get_chatkit_client()
-            
-            # Ensure AgentRun record exists for this run_id
-            await _ensure_agent_run_exists(run_id, payload)
-            
-            # Map event types to user-friendly messages
-            message_map = {
-                "created": "Agent run started",
-                "preparing_workspace": "Preparing workspace...",
-                "scouting": "Scouting repository...",
-                "planning": "Planning approach...",
-                "designing": "Designing solution...",
-                "implementing": "Implementing changes...",
-                "testing": "Testing implementation...",
-                "reviewing": "Reviewing changes...",
-                "verifying": "Verifying solution...",
-                "waiting_input": payload.get("prompt", "Waiting for your input..."),
-                "completed": "Task completed successfully",
-                "failed": f"Task failed: {payload.get('error_message', 'Unknown error')}",
-                "final_answer": payload.get("content", "Task completed"),
-                "progress_update": payload.get("content", "Agent is working...")
-            }
-            
-            message_content = message_map.get(event_type, f"Agent event: {event_type}")
-            
-            # Create ChatKit message via library (messaging infrastructure only)
-            if client:
-                await client.chatkit.messages.create(
-                    thread_id=run_id,
-                    content=message_content,
-                    role="assistant"
-                )
-                logger.info(f"Created ChatKit message for run {run_id}: {message_content}")
-            else:
-                logger.warning(f"ChatKit client not available, skipping message creation for run {run_id}")
-            
-        except Exception as e:
-            logger.error(f"Failed to create ChatKit message: {e}")
-    
     logger.info(f"Run {run_id} state: {event_type}, payload: {payload}")
 
 
@@ -125,29 +47,6 @@ async def handle_worker_user_event(event: dict, push_event_func) -> None:
         })
         logger.info(f"Pushed worker user event to SSE stream for run {run_id}")
     
-    # Create ChatKit message for worker user events using ChatKit library
-    if run_id and event_type in ["final_answer", "progress_update"]:
-        try:
-            client = get_chatkit_client()
-            
-            # Ensure AgentRun record exists for this run_id
-            await _ensure_agent_run_exists(run_id, payload)
-            
-            message_content = payload.get("content", "")
-            
-            # Create ChatKit message via library (messaging infrastructure only)
-            if client:
-                await client.chatkit.messages.create(
-                    thread_id=run_id,
-                    content=message_content,
-                    role="assistant"
-                )
-                logger.info(f"Created ChatKit message for run {run_id} from worker: {message_content}")
-            else:
-                logger.warning(f"ChatKit client not available, skipping message creation for run {run_id}")
-            
-        except Exception as e:
-            logger.error(f"Failed to create ChatKit message from worker: {e}")
 
 
 async def handle_agent_error(event: dict, push_event_func) -> None:
@@ -226,36 +125,6 @@ async def _manage_agent_step_lifecycle(run_id: str, event_type: str, payload: di
             session.add(step)
             await session.commit()
             logger.info(f"Created AgentStep for run {run_id}, phase {phase}")
-
-
-async def _ensure_agent_run_exists(run_id: str, payload: dict) -> None:
-    """Ensure AgentRun record exists for the given run_id"""
-    from internal.db import AsyncSessionLocal
-    from internal.models import AgentRun
-    from sqlalchemy import select
-    
-    async with AsyncSessionLocal() as session:
-        # Check if AgentRun exists
-        result = await session.execute(
-            select(AgentRun).where(AgentRun.id == run_id)
-        )
-        existing_run = result.scalar_one_or_none()
-        
-        if not existing_run:
-            # Create AgentRun record for worker's run_id
-            run = AgentRun(
-                id=run_id,
-                user_id=payload.get("user_id", "unknown"),
-                project_id=payload.get("project_id", ""),
-                repository_id=payload.get("repository_id", ""),
-                task=payload.get("task", ""),
-                status="RUNNING",
-            )
-            session.add(run)
-            await session.commit()
-            logger.info(f"Created AgentRun record for worker run_id: {run_id}")
-        else:
-            logger.debug(f"AgentRun record already exists for run_id: {run_id}")
 
 
 async def handle_worker_ready(event: dict, push_event_func) -> None:

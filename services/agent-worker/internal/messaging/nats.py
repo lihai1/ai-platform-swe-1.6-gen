@@ -201,6 +201,11 @@ class NATSMessaging:
                 logger.info(f"[NATS RECEIVE] Received user event on subject: {subject}")
                 logger.info(f"[NATS RECEIVE] User event payload: {json.dumps(data, indent=2)}")
                 
+                # Extract user_id from subject: agent.user.{user_id}.chat.{run_id}.user.events
+                subject_parts = subject.split(".")
+                if len(subject_parts) >= 3:
+                    data["user_id"] = subject_parts[2]
+                
                 await handler(data)
                 await msg.ack()
                 logger.info(f"[NATS RECEIVE] Successfully processed and acked user event on subject: {subject}")

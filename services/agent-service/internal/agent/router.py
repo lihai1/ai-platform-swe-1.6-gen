@@ -38,6 +38,7 @@ TERMINAL_EVENT_TYPES = {
     "failed",
     "cancelled",
     "budget_exceeded",
+    "final_answer",
 }
 
 

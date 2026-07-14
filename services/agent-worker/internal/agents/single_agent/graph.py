@@ -4,7 +4,6 @@ from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 from internal.workflow.state import EngineeringState
 from internal.workflow.nodes import (
-    completed_node,
     failed_node,
     cancelled_node,
     budget_exceeded_node,
@@ -42,27 +41,25 @@ def create_single_agent_graph(checkpointer: MemorySaver) -> StateGraph:
     
     # Add nodes for single-agent workflow
     workflow.add_node("REASONING", reasoning_node)
-    workflow.add_node("COMPLETED", completed_node)
     workflow.add_node("FAILED", failed_node)
     workflow.add_node("CANCELLED", cancelled_node)
     workflow.add_node("BUDGET_EXCEEDED", budget_exceeded_node)
-    
+
     # Define edges
     workflow.set_entry_point("REASONING")
-    
-    # REASONING -> (cancel check, budget check) -> COMPLETED, BUDGET_EXCEEDED, or CANCELLED
+
+    # REASONING -> (cancel check, budget check) -> END, BUDGET_EXCEEDED, or CANCELLED
     workflow.add_conditional_edges(
         "REASONING",
         lambda state: "cancel" if should_cancel(state) == "cancel" else check_budget(state),
         {
             "cancel": "CANCELLED",
             "budget_exceeded": "BUDGET_EXCEEDED",
-            "continue": "COMPLETED"
+            "continue": END
         }
     )
-    
+
     # Terminal states
-    workflow.add_edge("COMPLETED", END)
     workflow.add_edge("FAILED", END)
     workflow.add_edge("CANCELLED", END)
     workflow.add_edge("BUDGET_EXCEEDED", END)

@@ -57,16 +57,27 @@ def ensure_inside_workspace(path: Path) -> Path:
 
 
 def is_runnable_folder(path: Path) -> bool:
-    """Return True if a folder contains an identifiable entrypoint."""
+    """Return True if a folder contains Python project dependencies or entrypoint."""
     if not path.is_dir():
         return False
+    # Check for Python project dependency files
     if (path / "pyproject.toml").exists():
         return True
     if (path / "requirements.txt").exists():
         return True
+    if (path / "setup.py").exists():
+        return True
+    if (path / "setup.cfg").exists():
+        return True
+    # Check for common entrypoint files
     if (path / "main.py").exists():
         return True
+    if (path / "app.py").exists():
+        return True
     if (path / "src" / "main.py").exists():
+        return True
+    # Check for any Python files in the folder
+    if any(path.glob("*.py")):
         return True
     return False
 
@@ -257,16 +268,16 @@ def detect_command(folder: Path) -> str:
     if pyproject.exists():
         entry_script = _read_pyproject_entrypoint(folder)
         if entry_script:
-            return f"bash -lc 'pip install -e . && {entry_script}'"
+            return f"bash -lc 'pip install --break-system-packages -e . && {entry_script}'"
         # Default crewai pyproject pattern
-        return "bash -lc 'pip install -e . && crewai run'"
+        return "bash -lc 'pip install --break-system-packages -e . && crewai run'"
 
     requirements = folder / "requirements.txt"
     main = folder / "main.py"
     src_main = folder / "src" / "main.py"
 
     if requirements.exists() and main.exists():
-        return "bash -lc 'pip install -r requirements.txt && python main.py'"
+        return "bash -lc 'pip install --break-system-packages -r requirements.txt && python main.py'"
     if main.exists():
         return "python main.py"
     if src_main.exists():

@@ -58,11 +58,31 @@ See main [README.md](../../README.md) for future goals and milestones.
 
 ## Quick Start
 
-### Build Docker Image
+### Build Docker Images
+
+The agent worker uses a modular Dockerfile structure where each worker type only includes the packages it needs:
 
 ```bash
-docker build -f Dockerfile.worker -t agentic-agent-worker:latest .
+# Build base image with common dependencies
+docker build -f Dockerfile.base-builder -t agentic-agent-worker-base-builder:latest .
+
+# Build specialist worker (includes playwright, database deps)
+docker build -f Dockerfile.specialist -t agentic-specialist-agent-worker:latest .
+
+# Build single-agent worker (includes database deps + playwright for web search)
+docker build -f Dockerfile.single-agent -t agentic-single-agent-worker:latest .
+
+# Build CrewAI worker (includes crewai, pexpect)
+docker build -f Dockerfile.crewai -t agentic-crewai-agent-worker:latest .
 ```
+
+**Dockerfile Structure:**
+- `Dockerfile.base-builder` - Common dependencies (langchain, langgraph, docker, nats) - **665MB**
+- `Dockerfile.specialist` - Specialist workflow + playwright + database deps - **2.28GB**
+- `Dockerfile.single-agent` - Single-agent workflow + database deps + playwright (for web search) - **760MB**
+- `Dockerfile.crewai` - CrewAI framework + pexpect - **1.85GB**
+
+This modular approach reduces image size and build time by only including packages each worker type actually uses. Note that single-agent includes playwright for web search functionality, while specialist includes it for browser automation tasks.
 
 ### Run Worker Manually
 
@@ -81,6 +101,19 @@ docker run -e RUN_ID=<run_id> \
 ```
 
 ### Development Environment
+
+#### Local Development (with docker-compose services)
+
+**Use this for testing changed code locally** - run the agent-worker locally while other services run in docker-compose:
+
+```bash
+# From the project root, this starts agent-worker locally and other services in docker-compose
+make start-local SERVICES=agent-worker
+```
+
+The agent-worker will automatically start in the background, making it ideal for testing code changes without rebuilding containers.
+
+#### Standalone Development
 
 Start the development environment (NATS only):
 ```bash

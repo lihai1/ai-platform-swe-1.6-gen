@@ -1,4 +1,4 @@
-.PHONY: start compose-up compose-down clean-start test-ui help clean build-containers mock-llm-start
+.PHONY: start compose-up compose-down clean-start test-ui help clean build-containers mock-llm-start start-local stop-local
 
 # Default target
 help:
@@ -9,6 +9,8 @@ help:
 	@echo "  make clean-start    - Stop deployment, clean volumes, and start fresh (destructive)"
 	@echo "  make mock-llm-start  - Clean and start with mock LLM (LLM_PROVIDER=fake)"
 	@echo "  make test-ui        - Run UI e2e tests"
+	@echo "  make start-local SERVICES=web - Run specified services locally, others in docker-compose"
+	@echo "  make stop-local SERVICES=web  - Stop local services (specified in SERVICES parameter)"
 	@echo "  make help           - Show this help message"
 
 # Terminate deployment, clean volumes
@@ -22,7 +24,7 @@ start: build-containers
 	@echo "Starting services..."
 	docker-compose up -d
 	@echo "Services started successfully"
-
+restart: compose-down start
 # Build containers manually and start services
 compose-up: build-containers
 	@echo "Starting services..."
@@ -52,6 +54,7 @@ build-containers:
 	@echo "Building containers manually..."
 	docker build -t ai-platform-swe-16-gen-control-plane ./services/control-plane
 	docker build -t ai-platform-swe-16-gen-agent-service ./services/agent-service
+	docker build -t agentic-agent-worker-base-builder:latest . -f ./services/agent-worker/Dockerfile.base-builder
 	docker build -t agentic-specialist-agent-worker:latest . -f ./services/agent-worker/Dockerfile.specialist
 	docker build -t agentic-single-agent-worker:latest . -f ./services/agent-worker/Dockerfile.single-agent
 	docker build -t agentic-crewai-agent-worker:latest . -f ./services/agent-worker/Dockerfile.crewai
@@ -63,3 +66,62 @@ test-ui:
 	@echo "Running UI e2e tests..."
 	cd apps/web && npm run test:e2e
 	@echo "UI e2e tests completed"
+
+# use this to test localy 1 service under development localy
+# Start services with specified ones running locally
+start-local: 
+	@echo "Starting docker-compose services (excluding: $(SERVICES))..."
+	@if [ -z "$(SERVICES)" ]; then \
+		echo "Error: SERVICES parameter is required. Example: make start-local SERVICES=web"; \
+		exit 1; \
+	fi
+	docker-compose up -d $$(docker-compose config --services | grep -vE "$(SERVICES)")
+	@echo ""
+	@echo "Docker-compose services started."
+	@echo ""
+	@echo "To run the following services locally, execute these commands in separate terminals:"
+	@for service in $$(echo "$(SERVICES)" | tr ',' ' '); do \
+		case $$service in \
+			web) \
+				cd apps/web && npm install && npm start; \
+				;; \
+			agent-service) \
+				cd services/agent-service && python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt && python -m internal.chatkit.server; \
+				;; \
+			control-plane) \
+				cd services/control-plane && go run .; \
+				;; \
+			*) \
+				echo "  # Unknown service: $$service"; \
+				;; \
+		esac; \
+	done
+	@echo ""
+
+# Stop local services (specified in SERVICES parameter)
+stop-local:
+	@echo "Stopping local services: $(SERVICES)..."
+	@if [ -z "$(SERVICES)" ]; then \
+		echo "Error: SERVICES parameter is required. Example: make stop-local SERVICES=web"; \
+		exit 1; \
+	fi
+	@for service in $$(echo "$(SERVICES)" | tr ',' ' '); do \
+		case $$service in \
+			web) \
+				echo "Stopping web service"; \
+				lsof +D apps/web -t 2>/dev/null | xargs -r kill || true; \
+				;; \
+			agent-service) \
+				echo "Stopping agent-service"; \
+				lsof +D services/agent-service -t 2>/dev/null | xargs -r kill || true; \
+				;; \
+			control-plane) \
+				echo "Stopping control-plane"; \
+				lsof +D services/control-plane -t 2>/dev/null | xargs -r kill || true; \
+				;; \
+			*) \
+				echo "  # Unknown service: $$service"; \
+				;; \
+		esac; \
+	done
+	@echo "Local services stopped."

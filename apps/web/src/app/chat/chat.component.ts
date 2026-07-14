@@ -510,11 +510,6 @@ export class ChatComponent implements OnInit, OnDestroy {
     
     console.log('After config complete - agentType:', this.agentType, 'llmProvider:', this.llmProvider, 'modelName:', this.modelName, 'mockMode:', this.mockMode);
     
-    // Load runId from localStorage if available
-    const savedRunId = localStorage.getItem('chat_run_id');
-    if (savedRunId) {
-      this.runId = savedRunId;
-    }
     this.loadThread();
   }
   
@@ -524,7 +519,6 @@ export class ChatComponent implements OnInit, OnDestroy {
     localStorage.removeItem('chat_model_name');
     localStorage.removeItem('chat_api_key');
     localStorage.removeItem('chat_mock_mode');
-    localStorage.removeItem('chat_run_id');
     this.agentType = '';
     this.llmProvider = '';
     this.modelName = '';
@@ -544,207 +538,268 @@ export class ChatComponent implements OnInit, OnDestroy {
   async sendMessage(): Promise<void> {
     const message = this.newMessage.trim();
     if (!message || this.isSending) return;
-    
+
     console.log('Sending message with config:', {
       agentType: this.agentType,
       llmProvider: this.llmProvider,
       mockMode: this.mockMode,
       apiKey: this.apiKey ? '***' : 'none'
     });
-    
+
     this.newMessage = '';
     this.isSending = true;
-    
+
+    // The chat response and activity SSE share the same event stream; close any
+    // active activity stream while the chat response is consuming events. It will
+    // be restarted once the assistant message completes.
+    if (this.eventSource) {
+      this.eventSource.close();
+      this.eventSource = null;
+    }
+
     // Add user message immediately
     this.messages.push({ role: 'user', content: message });
-    
+
     try {
-      const token = localStorage.getItem('jwt_token');
-      const userStr = localStorage.getItem('user');
-      const user = userStr ? JSON.parse(userStr) : null;
-      // Sanitize user ID: replace colons with hyphens for NATS subject compatibility
-      const userId = (user?.id || 'user-local-dev').replace(/:/g, '-');
-      
-      const response = await fetch('/api/chatkit/', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'X-User-Subject': userId
-        },
-        body: JSON.stringify({
-          message: message,
-          run_id: this.runId,
-          trigger_workflow: this.triggerWorkflow,
-          project_id: this.projectId,
-          repository_id: this.repositoryId,
-          mock_mode: this.mockMode,
-          llm_provider: this.llmProvider,
-          model_name: this.modelName,
-          agent_type: this.agentType,
-          api_key: this.apiKey
-        })
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to send message');
-      }
-      
-      // Handle streaming response
-      const reader = response.body!.getReader();
-      const decoder = new TextDecoder();
-      let assistantMessage = '';
-      let workflowTriggered = false;
-      
-      // Add empty assistant message that will be updated
-      this.messages.push({ role: 'assistant', content: '' });
-      
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        
-        const chunk = decoder.decode(value);
-        const lines = chunk.split('\n');
-        
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              console.log('Angular SSE data:', data);
-              
-              // Handle ChatKit protocol events
-              if (data.type === 'progress_update') {
-                console.log('Angular progress_update:', data.text);
-                // Update with progress text
-                this.ngZone.run(() => {
-                  const lastMessage = this.messages[this.messages.length - 1];
-                  if (lastMessage && lastMessage.role === 'assistant') {
-                    this.messages[this.messages.length - 1] = { role: 'assistant', content: data.text || lastMessage.content };
-                    this.cdr.detectChanges();
-                  }
-                });
-              } else if (data.type === 'thread.item.done' && data.item) {
-                console.log('Angular thread.item.done:', data.item);
-                // Handle final assistant message
-                const content = data.item.content || [];
-                if (content.length > 0) {
-                  const text = content.map((c: any) => c.text || '').join('');
-                  assistantMessage = text;
-
-                  // Check if content is a JSON array of projects
-                  let projects: any[] = [];
-                  try {
-                    const parsed = JSON.parse(text);
-                    if (Array.isArray(parsed)) {
-                      projects = parsed;
-                    }
-                  } catch (e) {
-                    // Not JSON, use regular text
-                  }
-
-                  // Also check if projects are in the item.projects field
-                  if (projects.length === 0) {
-                    projects = data.item.projects || [];
-                  }
-
-                  if (data.item.thread_id) {
-                    this.runId = data.item.thread_id;
-                    if (this.runId) {
-                      // Update project object in localStorage with run_id
-                      if (this.projectId) {
-                        const projectStr = localStorage.getItem(`project_${this.projectId}`);
-                        if (projectStr) {
-                          try {
-                            const project = JSON.parse(projectStr);
-                            project.thread_id = this.runId;
-                            localStorage.setItem(`project_${this.projectId}`, JSON.stringify(project));
-                            console.log(`Updated project ${this.projectId} with run_id ${this.runId}`);
-                          } catch (e) {
-                            console.log('Failed to update project object in localStorage');
-                          }
-                        }
-                      }
-                    }
-                  }
-
-                  this.ngZone.run(() => {
-                    const lastMessage = this.messages[this.messages.length - 1];
-                    if (lastMessage && lastMessage.role === 'assistant') {
-                      this.messages[this.messages.length - 1] = {
-                        role: 'assistant',
-                        content: assistantMessage,
-                        projects: projects.length > 0 ? projects : undefined
-                      };
-                    }
-                    // Re-enable button on completion
-                    this.isSending = false;
-                    this.cdr.detectChanges();
-                  });
-                }
-              } else if (data.content) {
-                console.log('Angular legacy format:', data.content);
-                // Legacy format fallback
-                assistantMessage += data.content;
-                if (data.thread_id) {
-                  this.runId = data.thread_id;
-                  if (this.runId) {
-                    // Update project object in localStorage with run_id
-                    if (this.projectId) {
-                      const projectStr = localStorage.getItem(`project_${this.projectId}`);
-                      if (projectStr) {
-                        try {
-                          const project = JSON.parse(projectStr);
-                          project.thread_id = this.runId;
-                          localStorage.setItem(`project_${this.projectId}`, JSON.stringify(project));
-                          console.log(`Updated project ${this.projectId} with run_id ${this.runId}`);
-                        } catch (e) {
-                          console.log('Failed to update project object in localStorage');
-                        }
-                      }
-                    }
-                  }
-                }
-                if (data.workflow_triggered) {
-                  workflowTriggered = true;
-                }
-                
-                // Update last message (assistant) - run in Angular zone and force change detection
-                this.ngZone.run(() => {
-                  const lastMessage = this.messages[this.messages.length - 1];
-                  if (lastMessage && lastMessage.role === 'assistant') {
-                    this.messages[this.messages.length - 1] = { role: 'assistant', content: assistantMessage };
-                    this.cdr.detectChanges();
-                  }
-                });
-              }
-            } catch (e) {
-              console.error('Angular SSE parse error:', e);
-              // Ignore parse errors for incomplete chunks
-            }
-          }
-        }
-      }
-      
-      // Re-enable button if stream ended without thread.item.done
-      if (this.isSending) {
-        this.isSending = false;
-        this.cdr.detectChanges();
-      }
-      
-      // Start event stream if workflow was triggered
-      if (workflowTriggered && this.runId) {
-        this.handleRunStarted(this.runId);
-      }
-      
+      await this.sendChatkitMessage(message, true);
     } catch (error) {
       console.error('Failed to send message:', error);
-      this.messages.push({ 
-        role: 'assistant', 
-        content: 'Sorry, something went wrong. Please try again.' 
+      this.messages.push({
+        role: 'assistant',
+        content: 'Sorry, something went wrong. Please try again.'
       });
       this.isSending = false;
       this.cdr.detectChanges();
     }
+  }
+
+  private async sendChatkitMessage(message: string, updateUi: boolean): Promise<void> {
+    const { token, userId } = this.getUserInfo();
+    const response = await this.sendChatkitRequest(token, userId, message);
+    
+    if (!response.ok) {
+      throw new Error('Failed to send message');
+    }
+
+    const result = await this.processChatkitStream(response, updateUi);
+    
+    if (this.isSending) {
+      this.isSending = false;
+      this.cdr.detectChanges();
+    }
+
+    if (result.workflowTriggered && this.runId) {
+      this.handleRunStarted(this.runId);
+    }
+  }
+
+  private getUserInfo(): { token: string | null; userId: string } {
+    const token = localStorage.getItem('jwt_token');
+    const userStr = localStorage.getItem('user');
+    const user = userStr ? JSON.parse(userStr) : null;
+    const userId = (user?.id || 'user-local-dev').replace(/:/g, '-');
+    return { token, userId };
+  }
+
+  private async sendChatkitRequest(
+    token: string | null,
+    userId: string,
+    message: string
+  ): Promise<Response> {
+    return await fetch('/api/chatkit/', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'X-User-Subject': userId
+      },
+      body: JSON.stringify({
+        message: message,
+        run_id: this.runId,
+        trigger_workflow: this.triggerWorkflow,
+        project_id: this.projectId,
+        repository_id: this.repositoryId,
+        mock_mode: this.mockMode,
+        llm_provider: this.llmProvider,
+        model_name: this.modelName,
+        agent_type: this.agentType,
+        api_key: this.apiKey
+      })
+    });
+  }
+
+  private async processChatkitStream(
+    response: Response,
+    updateUi: boolean
+  ): Promise<{ workflowTriggered: boolean }> {
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let assistantMessage = '';
+    let workflowTriggered = false;
+
+    if (updateUi) {
+      this.messages.push({ role: 'assistant', content: '' });
+    }
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      const chunk = decoder.decode(value);
+      const lines = chunk.split('\n');
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const result = this.processSSELine(line, assistantMessage, updateUi);
+          assistantMessage = result.assistantMessage;
+          if (result.workflowTriggered) {
+            workflowTriggered = true;
+          }
+        }
+      }
+    }
+
+    return { workflowTriggered };
+  }
+
+  private processSSELine(
+    line: string,
+    assistantMessage: string,
+    updateUi: boolean
+  ): { assistantMessage: string; workflowTriggered: boolean } {
+    try {
+      const data = JSON.parse(line.slice(6));
+      console.log('SSE data:', data);
+
+      let workflowTriggered = false;
+      if (data.workflow_triggered) {
+        workflowTriggered = true;
+      }
+
+      if (data.type === 'progress_update' && updateUi) {
+        this.handleProgressUpdate(data);
+      } else if (data.type === 'thread.item.done' && data.item) {
+        const result = this.handleThreadItemDone(data, assistantMessage, updateUi);
+        assistantMessage = result.assistantMessage;
+      } else if (data.content) {
+        assistantMessage = this.handleContentUpdate(data, assistantMessage, updateUi);
+      }
+
+      return { assistantMessage, workflowTriggered };
+    } catch (e) {
+      console.error('SSE parse error:', e);
+      return { assistantMessage, workflowTriggered: false };
+    }
+  }
+
+  private handleProgressUpdate(data: any): void {
+    this.ngZone.run(() => {
+      const lastMessage = this.messages[this.messages.length - 1];
+      if (lastMessage?.role === 'assistant') {
+        this.messages[this.messages.length - 1] = {
+          role: 'assistant',
+          content: data.text || lastMessage.content
+        };
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  private handleThreadItemDone(
+    data: any,
+    assistantMessage: string,
+    updateUi: boolean
+  ): { assistantMessage: string } {
+    const content = data.item.content || [];
+    if (content.length > 0) {
+      const text = content.map((c: any) => c.text || '').join('');
+      assistantMessage = text;
+
+      const projects = this.extractProjectsFromItem(data, text);
+
+      if (data.item.thread_id) {
+        this.updateRunId(data.item.thread_id);
+      }
+
+      if (updateUi) {
+        this.updateAssistantMessage(assistantMessage, projects, true);
+      }
+    }
+    return { assistantMessage };
+  }
+
+  private extractProjectsFromItem(data: any, text: string): any[] {
+    let projects: any[] = [];
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) {
+        projects = parsed;
+      }
+    } catch (e) {
+      // Not JSON, use regular text
+    }
+
+    if (projects.length === 0) {
+      projects = data.item.projects || [];
+    }
+
+    return projects;
+  }
+
+  private handleContentUpdate(
+    data: any,
+    assistantMessage: string,
+    updateUi: boolean
+  ): string {
+    assistantMessage += data.content;
+    if (data.thread_id) {
+      this.updateRunId(data.thread_id);
+    }
+
+    if (updateUi) {
+      this.updateAssistantMessage(assistantMessage, undefined, false);
+    }
+
+    return assistantMessage;
+  }
+
+  private updateAssistantMessage(
+    content: string,
+    projects: any[] | undefined,
+    complete: boolean
+  ): void {
+    this.ngZone.run(() => {
+      const lastMessage = this.messages[this.messages.length - 1];
+      if (lastMessage?.role === 'assistant') {
+        this.messages[this.messages.length - 1] = {
+          role: 'assistant',
+          content: content,
+          projects: projects
+        };
+        if (complete) {
+          this.isSending = false;
+        }
+        this.cdr.detectChanges();
+      }
+    });
+  }
+
+  private updateRunId(runId: string): void {
+    this.runId = runId;
+    if (this.projectId) {
+      const projectStr = localStorage.getItem(`project_${this.projectId}`);
+      if (projectStr) {
+        try {
+          const project = JSON.parse(projectStr);
+          project.thread_id = runId;
+          localStorage.setItem(`project_${this.projectId}`, JSON.stringify(project));
+          console.log(`Updated project ${this.projectId} with run_id ${runId}`);
+        } catch (e) {
+          console.log('Failed to update project object in localStorage');
+        }
+      }
+    }
+    this.handleRunStarted(runId);
   }
   
   private async loadThread(): Promise<void> {
@@ -757,61 +812,18 @@ export class ChatComponent implements OnInit, OnDestroy {
     console.log('Loading thread for project:', this.projectId);
     
     try {
-      const token = localStorage.getItem('jwt_token');
-      const userStr = localStorage.getItem('user');
-      const user = userStr ? JSON.parse(userStr) : null;
-      const userId = (user?.id || 'user-local-dev').replace(/:/g, '-');
-      
-      // Check if project object exists in localStorage and has run_id
-      const projectStr = localStorage.getItem(`project_${this.projectId}`);
-      let savedRunId = null;
-      
-      if (projectStr) {
-        try {
-          const project = JSON.parse(projectStr);
-          savedRunId = project.thread_id;
-          console.log('Found project object with run_id:', savedRunId);
-        } catch (error) {
-          console.log('Failed to parse project object from localStorage');
-        }
-      }
+      const { token, userId } = this.getUserInfo();
+      const savedRunId = this.getSavedRunId();
       
       if (savedRunId) {
-        // Try to load by run_id
-        try {
-          const response = await this.http.get<any>(`/api/chatkit/threads/${savedRunId}`, {
-            headers: { 
-              Authorization: `Bearer ${token}`,
-              'X-User-Subject': userId
-            }
-          }).toPromise();
-          
-          if (response && response.thread) {
-            this.runId = savedRunId;
-            this.messages = response.items || [];
-            console.log('Successfully loaded thread from project.run_id');
-            return;
-          }
-        } catch (error) {
-          console.log('Thread not found or invalid, clearing run_id from project');
-          // Update project object in localStorage to remove run_id
-          if (projectStr) {
-            try {
-              const project = JSON.parse(projectStr);
-              project.thread_id = null;
-              localStorage.setItem(`project_${this.projectId}`, JSON.stringify(project));
-            } catch (e) {
-              console.log('Failed to update project object in localStorage');
-            }
-          }
+        const loaded = await this.loadThreadByRunId(savedRunId, token, userId);
+        if (loaded) {
+          return;
         }
+        this.clearProjectRunId();
       }
       
-      // No run_id in project, initialize empty thread
-      console.log('No run_id found in project, initializing empty thread');
-      this.messages = [];
-      this.runId = null;
-      
+      this.initializeEmptyThread();
     } catch (error) {
       console.error('Failed to load thread:', error);
       this.messages = [];
@@ -819,6 +831,66 @@ export class ChatComponent implements OnInit, OnDestroy {
       console.log('loadThread completed, setting loadingThread = false');
       this.loadingThread = false;
     }
+  }
+
+  private getSavedRunId(): string | null {
+    const projectStr = localStorage.getItem(`project_${this.projectId}`);
+    if (projectStr) {
+      try {
+        const project = JSON.parse(projectStr);
+        const savedRunId = project.thread_id;
+        console.log('Found project object with run_id:', savedRunId);
+        return savedRunId;
+      } catch (error) {
+        console.log('Failed to parse project object from localStorage');
+      }
+    }
+    return null;
+  }
+
+  private async loadThreadByRunId(
+    savedRunId: string,
+    token: string | null,
+    userId: string
+  ): Promise<boolean> {
+    try {
+      const response = await this.http.get<any>(`/api/chatkit/threads/${savedRunId}`, {
+        headers: { 
+          Authorization: `Bearer ${token}`,
+          'X-User-Subject': userId
+        }
+      }).toPromise();
+
+      if (response && response.thread) {
+        this.runId = savedRunId;
+        this.messages = response.items || [];
+        console.log('Successfully loaded thread from project.run_id');
+        this.handleRunStarted(savedRunId);
+        return true;
+      }
+    } catch (error) {
+      console.log('Thread not found or invalid, clearing run_id from project');
+    }
+    return false;
+  }
+
+  private clearProjectRunId(): void {
+    const projectStr = localStorage.getItem(`project_${this.projectId}`);
+    if (projectStr) {
+      try {
+        const project = JSON.parse(projectStr);
+        project.thread_id = null;
+        localStorage.setItem(`project_${this.projectId}`, JSON.stringify(project));
+      } catch (e) {
+        console.log('Failed to update project object in localStorage');
+      }
+    }
+  }
+
+  private initializeEmptyThread(): void {
+    console.log('No run_id found in project, initializing empty thread');
+    this.messages = [];
+    this.runId = null;
   }
   
   handleRunStarted(runId: string): void {
@@ -881,8 +953,19 @@ export class ChatComponent implements OnInit, OnDestroy {
       case 'run_completed':
       case 'run_failed':
       case 'run_cancelled':
+      case 'completed':
+      case 'failed':
+      case 'cancelled':
+      case 'budget_exceeded':
+      case 'final_answer':
         if (this.currentRun) {
-          this.currentRun.status = event.event_type.replace('run_', '');
+          if (event.event_type === 'final_answer' || event.event_type === 'completed') {
+            this.currentRun.status = 'completed';
+          } else if (event.event_type === 'budget_exceeded') {
+            this.currentRun.status = 'budget_exceeded';
+          } else {
+            this.currentRun.status = event.event_type.replace('run_', '');
+          }
         }
         if (this.eventSource) {
           this.eventSource.close();
@@ -898,9 +981,8 @@ export class ChatComponent implements OnInit, OnDestroy {
   }
   
   selectProject(project: Project): void {
-    // Send selected project path as a user message
+    // Pre-fill the input with selected project path
     this.newMessage = project.path;
-    this.sendMessage();
   }
 
   isJsonArray(content: string): boolean {
@@ -925,30 +1007,54 @@ export class ChatComponent implements OnInit, OnDestroy {
     if (!this.runId) return;
 
     try {
-      const token = localStorage.getItem('jwt_token');
-      const userStr = localStorage.getItem('user');
-      const user = userStr ? JSON.parse(userStr) : null;
-      const userId = (user?.id || 'user-local-dev').replace(/:/g, '-');
-
-      await this.http.post(`/api/chatkit/close/${this.runId}`, {}, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'X-User-Subject': userId
-        }
-      }).toPromise();
-
-      // Clear thread state
-      this.runId = null;
-      localStorage.removeItem('chat_run_id');
-      this.messages = [];
-      this.currentRunId = null;
-      this.currentRun = null;
-
-      // Show confirmation message
-      this.messages.push({ role: 'assistant', content: 'Session closed. You can start a new conversation.' });
+      const { token, userId } = this.getUserInfo();
+      await this.closeSessionOnServer(token, userId);
+      this.clearThreadState();
+      this.clearProjectThreadId();
+      this.addSuccessMessage();
     } catch (error) {
       console.error('Failed to close session:', error);
-      this.messages.push({ role: 'assistant', content: 'Failed to close session. Please try again.' });
+      this.addErrorMessage();
     }
+  }
+
+  private async closeSessionOnServer(token: string | null, userId: string): Promise<void> {
+    await this.http.post(`/api/chatkit/close/${this.runId}`, {}, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'X-User-Subject': userId
+      }
+    }).toPromise();
+  }
+
+  private clearThreadState(): void {
+    this.runId = null;
+    this.messages = [];
+    this.currentRunId = null;
+    this.currentRun = null;
+  }
+
+  private clearProjectThreadId(): void {
+    if (this.projectId) {
+      const projectStr = localStorage.getItem(`project_${this.projectId}`);
+      if (projectStr) {
+        try {
+          const project = JSON.parse(projectStr);
+          project.thread_id = null;
+          localStorage.setItem(`project_${this.projectId}`, JSON.stringify(project));
+          console.log(`Cleared thread_id from project ${this.projectId}`);
+        } catch (e) {
+          console.error('Failed to clear thread_id from project object:', e);
+        }
+      }
+    }
+  }
+
+  private addSuccessMessage(): void {
+    this.messages.push({ role: 'assistant', content: 'Session closed. You can start a new conversation.' });
+  }
+
+  private addErrorMessage(): void {
+    this.messages.push({ role: 'assistant', content: 'Failed to close session. Please try again.' });
   }
 }

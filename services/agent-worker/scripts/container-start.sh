@@ -5,7 +5,7 @@ echo "Starting agent orchestrator container..."
 
 # Get environment variables
 RUN_ID="${RUN_ID}"
-REPOSITORY_URL="${REPOSITORY_URL:-/app/fixtures/go-rest-feature}"
+REPOSITORY_URL="${REPOSITORY_URL:-}"
 BRANCH="${BRANCH:-main}"
 GIT_USERNAME="${GIT_USERNAME:-}"
 GIT_TOKEN="${GIT_TOKEN:-}"
@@ -34,25 +34,10 @@ cd /workspace
 if [ "$MOCK_MODE" = "true" ]; then
     echo "Mock mode enabled - creating mock repository structure..."
     # Create a simple mock repository structure
-    mkdir -p /workspace/src
     cat > /workspace/README.md << 'EOF'
 # Mock Repository
 
 This is a mock repository for testing purposes.
-EOF
-    cat > /workspace/src/main.go << 'EOF'
-package main
-
-import "fmt"
-
-func main() {
-    fmt.Println("Hello, World!")
-}
-EOF
-    cat > /workspace/go.mod << 'EOF'
-module mock-repo
-
-go 1.21
 EOF
     git init
     git config user.email "mock@example.com"
@@ -62,12 +47,20 @@ EOF
     echo "Mock repository created successfully"
 else
     if [ -z "$REPOSITORY_URL" ]; then
-        echo "Error: REPOSITORY_URL environment variable is required in non-mock mode"
-        exit 1
+        echo "No repository URL provided, skipping repository setup"
+        echo "Workspace will be empty"
+    else
+        # Use common clone script
+        source /app/scripts/clone-repo.sh
     fi
+fi
 
-    # Use common clone script
-    source /app/scripts/clone-repo.sh
+# Copy agents.md to workspace for code quality guidelines
+if [ -f "/app/agents.md" ]; then
+    cp /app/agents.md /workspace/agents.md
+    echo "Copied agents.md to workspace"
+else
+    echo "Warning: agents.md not found in /app, skipping"
 fi
 
 # Start the worker process
