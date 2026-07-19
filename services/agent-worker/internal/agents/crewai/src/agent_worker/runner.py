@@ -5,10 +5,11 @@ import asyncio
 import logging
 import os
 import shlex
-import signal
 import time
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Optional
 
 import pexpect
 
@@ -36,6 +37,17 @@ class RunnerError(Exception):
         self.message = message
 
 
+@dataclass
+class ProcessResult:
+    """Bounded result returned by ProcessRunner.run()."""
+
+    exit_code: int
+    cancelled: bool
+    timed_out: bool
+    stdout_tail: str
+    stderr_tail: str
+
+
 class ProcessRunner:
     """Run a child process with pexpect, stream output, and handle input."""
 
@@ -47,54 +59,84 @@ class ProcessRunner:
         input_idle_seconds: float = 30.0,
         output_max_buffer_chars: int = 8000,
         command_timeout: Optional[int] = None,
+        command_args: Optional[Sequence[str]] = None,
+        env: Optional[dict] = None,
+        publish_started: bool = True,
+        cancel_event: Optional[asyncio.Event] = None,
     ):
         self.nats = nats
         self.command = command
+        self.command_args = command_args
+        self.env = env
         self.cwd = cwd
         self.input_idle_seconds = input_idle_seconds
         self.output_max_buffer_chars = output_max_buffer_chars
         self.command_timeout = command_timeout
+        self.publish_started = publish_started
+        self.cancel_event = cancel_event or asyncio.Event()
         self.child: Optional[pexpect.spawn] = None
         self._cancelled = False
+        self._timed_out = False
         self._waiting_input = False
         self._input_event: Optional[asyncio.Event] = None
         self._pending_input: Optional[str] = None
-        self._full_output: list[str] = []
+        self._stdout_buffer: list[str] = []
+        self._stderr_buffer: list[str] = []
         self._process_started: bool = False
+        self._start_time: float = 0.0
 
-    async def run(self) -> None:
+    async def run(self) -> ProcessResult:
         """Run the command and stream events until completion."""
-        logger.info("Running command: %s in %s", self.command, self.cwd)
-        args = ["bash", "-lc", self.command]
+        display = self.command or shlex.join(self.command_args or [])
+        logger.info("Running command: %s in %s", display, self.cwd)
         env = os.environ.copy()
+        if self.env:
+            env.update(self.env)
         env.setdefault("PYTHONUNBUFFERED", "1")
         env.setdefault("FORCE_COLOR", "0")
 
+        self._start_time = time.monotonic()
+
         try:
-            self.child = pexpect.spawn(
-                args[0],
-                args[1:],
-                cwd=str(self.cwd),
-                env=env,
-                encoding="utf-8",
-                codec_errors="replace",
-                timeout=self.input_idle_seconds,
-                maxread=65536,
-                searchwindowsize=200,
-                echo=False,
-            )
+            if self.command_args:
+                self.child = pexpect.spawn(
+                    self.command_args[0],
+                    list(self.command_args[1:]),
+                    cwd=str(self.cwd),
+                    env=env,
+                    encoding="utf-8",
+                    codec_errors="replace",
+                    timeout=max(0.1, self.input_idle_seconds),
+                    maxread=65536,
+                    searchwindowsize=200,
+                    echo=False,
+                )
+            else:
+                self.child = pexpect.spawn(
+                    "bash",
+                    ["-lc", self.command],
+                    cwd=str(self.cwd),
+                    env=env,
+                    encoding="utf-8",
+                    codec_errors="replace",
+                    timeout=max(0.1, self.input_idle_seconds),
+                    maxread=65536,
+                    searchwindowsize=200,
+                    echo=False,
+                )
         except Exception as e:
             await self._publish_failure(f"Failed to spawn process: {e}")
-            return
+            return ProcessResult(exit_code=1, cancelled=False, timed_out=False, stdout_tail="", stderr_tail=str(e))
 
-        await self.nats.publish_state(
-            "started",
-            {
-                "status": "started",
-                "command": self.command,
-                "cwd": str(self.cwd),
-            },
-        )
+        if self.publish_started:
+            await self.nats.publish_state(
+                "started",
+                {
+                    "status": "started",
+                    "command": display,
+                    "cwd": str(self.cwd),
+                },
+            )
         self._process_started = True
 
         try:
@@ -105,12 +147,37 @@ class ProcessRunner:
         finally:
             await self._cleanup()
 
+        exit_code = self.child.exitstatus if self.child else 1
+        if exit_code is None:
+            exit_code = 1
+
+        return ProcessResult(
+            exit_code=exit_code,
+            cancelled=self._cancelled,
+            timed_out=self._timed_out,
+            stdout_tail=self._tail(self._stdout_buffer),
+            stderr_tail=self._tail(self._stderr_buffer),
+        )
+
     async def _read_loop(self) -> None:
-        """Read child output until EOF or timeout."""
+        """Read child output until EOF, cancellation, or command timeout."""
         buffer = ""
         last_output_time = time.monotonic()
 
         while self.child and self.child.isalive():
+            if self._cancelled:
+                break
+            if self.cancel_event.is_set():
+                await self.cancel()
+                break
+            if self.command_timeout and self.command_timeout > 0:
+                elapsed = time.monotonic() - self._start_time
+                if elapsed >= self.command_timeout:
+                    self._timed_out = True
+                    logger.warning("Command timed out after %s seconds", elapsed)
+                    await self._terminate()
+                    break
+
             try:
                 index = await self.child.expect(
                     ["\n", "\r", pexpect.EOF, pexpect.TIMEOUT],
@@ -163,6 +230,13 @@ class ProcessRunner:
             await self._publish_cancelled()
             return
 
+        if self._timed_out:
+            await self._publish_failure(
+                f"Command timed out after {self.command_timeout} seconds",
+                exit_code=124,
+            )
+            return
+
         exit_code = self.child.exitstatus
         if exit_code is None:
             try:
@@ -171,7 +245,7 @@ class ProcessRunner:
                 exit_code = 1
 
         if exit_code == 0:
-            final_content = "\n".join(self._full_output).strip()
+            final_content = "".join(self._stdout_buffer).strip()
             if not final_content:
                 final_content = "CrewAI run completed successfully."
             await self.nats.publish_state(
@@ -201,11 +275,11 @@ class ProcessRunner:
         return text, last_output_time
 
     async def _flush_buffer(self, text: str) -> None:
-        """Publish buffered output as state and chat events."""
+        """Publish buffered output as state and chat events, and keep a bounded tail."""
         if not text:
             return
         clean_text = text.replace("\r", "")
-        self._full_output.append(clean_text)
+        self._stdout_buffer.append(clean_text)
         await self.nats.publish_state(
             "output",
             state_output(
@@ -223,6 +297,28 @@ class ProcessRunner:
                 message=clean_text,
             )["payload"],
         )
+
+    def _tail(self, buffer: list[str], limit: int = 2000) -> str:
+        """Return the last `limit` characters of the collected buffer."""
+        text = "".join(buffer)
+        if len(text) <= limit:
+            return text
+        return "..." + text[-limit:]
+
+    async def _terminate(self) -> None:
+        """Gracefully terminate the child process."""
+        if not self.child or not self.child.isalive():
+            return
+        try:
+            self.child.sendintr()  # SIGINT
+            await asyncio.sleep(1.0)
+            if self.child.isalive():
+                self.child.sendeof()
+                await asyncio.sleep(1.0)
+            if self.child.isalive():
+                self.child.kill(9)
+        except Exception as e:
+            logger.warning("Failed to terminate process: %s", e)
 
     async def _handle_input_prompt(self, text: str) -> None:
         """Publish a waiting_input state and wait for user input."""
@@ -265,13 +361,25 @@ class ProcessRunner:
         self._waiting_input = False
 
     async def handle_user_input(self, data: dict) -> None:
-        """Handle a user input event from NATS."""
-        user_input = data.get("input") or data.get("text") or data.get("content")
+        """Handle a user input event from NATS.
+
+        Accepts either a flat dict with input/text/content or an event envelope
+        containing a `payload` with those fields.
+        """
+        payload = data.get("payload") or {}
+        user_input = (
+            data.get("input")
+            or data.get("text")
+            or data.get("content")
+            or payload.get("input")
+            or payload.get("text")
+            or payload.get("content")
+        )
         if not user_input:
             logger.warning("Received user_input event without text: %s", data)
             return
         logger.info("Received user input for run %s", self.nats.run_id)
-        
+
         # Check if process is still running
         if not self.child or not self.child.isalive():
             if self._process_started:
@@ -287,28 +395,23 @@ class ProcessRunner:
                 logger.info("Process not started yet, starting...")
                 await self.run()
                 return
-        
+
         # Process is running, send input directly
         self.child.sendline(user_input)
         await self.nats.publish_state(
             "output",
-            {"data": f"{user_input}\n", "stream": "stdin"},
+            state_output(
+                self.nats.run_id,
+                self.nats.uid,
+                data=f"{user_input}\n",
+                stream="stdin",
+            )["payload"],
         )
 
     async def cancel(self) -> None:
         """Cancel the running process."""
         self._cancelled = True
-        if self.child and self.child.isalive():
-            try:
-                self.child.sendintr()  # SIGINT
-                await asyncio.sleep(1.0)
-                if self.child.isalive():
-                    self.child.sendeof()
-                    await asyncio.sleep(1.0)
-                if self.child.isalive():
-                    self.child.kill(9)
-            except Exception as e:
-                logger.warning("Failed to terminate process: %s", e)
+        await self._terminate()
 
     async def _publish_failure(self, error: str, exit_code: Optional[int] = None) -> None:
         """Publish failed state and final answer error."""

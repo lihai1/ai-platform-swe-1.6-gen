@@ -8,7 +8,7 @@ import { catchError } from 'rxjs/operators';
 })
 export class HttpClientService {
   private apiUrl = ''; // Empty base URL - full paths are specified in component calls
-  private agentApiUrl = 'http://localhost:8000';
+  private agentApiUrl = ''; // Use relative URLs to go through nginx proxy
 
   constructor(private http: HttpClient) {}
 

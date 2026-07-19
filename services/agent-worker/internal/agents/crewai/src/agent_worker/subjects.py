@@ -3,47 +3,47 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-
-
-DEFAULT_CONTROL_START_SUBJECT_TEMPLATE = "agent.control.{run_id}.start"
-DEFAULT_CONTROL_CLOSE_SUBJECT_TEMPLATE = "agent.control.{run_id}.close"
-DEFAULT_CONTROL_RESUME_SUBJECT_TEMPLATE = "agent.control.{run_id}.resume"
-DEFAULT_USER_EVENTS_SUBJECT_TEMPLATE = "agent.user.{uid}.chat.{run_id}.user.events"
-DEFAULT_STATE_EVENTS_SUBJECT_TEMPLATE = "agent.user.{uid}.events.{run_id}.state.>"
-DEFAULT_CHAT_EVENTS_SUBJECT_TEMPLATE = "agent.user.{uid}.chat.{run_id}.worker.events"
+from agentic_shared.nats_subjects import (
+    CONTROL_START_SUBJECT_TEMPLATE,
+    CONTROL_CLOSE_SUBJECT_TEMPLATE,
+    CONTROL_RESUME_SUBJECT_TEMPLATE,
+    CHAT_USER_EVENTS_SUBJECT_TEMPLATE,
+    EVENT_STATE_WILDCARD_SUBJECT_TEMPLATE,
+    CHAT_WORKER_EVENTS_SUBJECT_TEMPLATE,
+)
 
 
 @dataclass(frozen=True)
 class SubjectTemplates:
     """Hold subject templates from environment variables."""
 
-    control_start: str = DEFAULT_CONTROL_START_SUBJECT_TEMPLATE
-    control_close: str = DEFAULT_CONTROL_CLOSE_SUBJECT_TEMPLATE
-    control_resume: str = DEFAULT_CONTROL_RESUME_SUBJECT_TEMPLATE
-    user_events: str = DEFAULT_USER_EVENTS_SUBJECT_TEMPLATE
-    state_events: str = DEFAULT_STATE_EVENTS_SUBJECT_TEMPLATE
-    chat_events: str = DEFAULT_CHAT_EVENTS_SUBJECT_TEMPLATE
+    control_start: str = CONTROL_START_SUBJECT_TEMPLATE
+    control_close: str = CONTROL_CLOSE_SUBJECT_TEMPLATE
+    control_resume: str = CONTROL_RESUME_SUBJECT_TEMPLATE
+    user_events: str = CHAT_USER_EVENTS_SUBJECT_TEMPLATE
+    state_events: str = EVENT_STATE_WILDCARD_SUBJECT_TEMPLATE
+    chat_events: str = CHAT_WORKER_EVENTS_SUBJECT_TEMPLATE
 
     @classmethod
     def from_env(cls) -> "SubjectTemplates":
         return cls(
             control_start=os.getenv(
-                "CONTROL_START_SUBJECT_TEMPLATE", DEFAULT_CONTROL_START_SUBJECT_TEMPLATE
+                "CONTROL_START_SUBJECT_TEMPLATE", CONTROL_START_SUBJECT_TEMPLATE
             ),
             control_close=os.getenv(
-                "CONTROL_CLOSE_SUBJECT_TEMPLATE", DEFAULT_CONTROL_CLOSE_SUBJECT_TEMPLATE
+                "CONTROL_CLOSE_SUBJECT_TEMPLATE", CONTROL_CLOSE_SUBJECT_TEMPLATE
             ),
             control_resume=os.getenv(
-                "CONTROL_RESUME_SUBJECT_TEMPLATE", DEFAULT_CONTROL_RESUME_SUBJECT_TEMPLATE
+                "CONTROL_RESUME_SUBJECT_TEMPLATE", CONTROL_RESUME_SUBJECT_TEMPLATE
             ),
             user_events=os.getenv(
-                "USER_EVENTS_SUBJECT_TEMPLATE", DEFAULT_USER_EVENTS_SUBJECT_TEMPLATE
+                "USER_EVENTS_SUBJECT_TEMPLATE", CHAT_USER_EVENTS_SUBJECT_TEMPLATE
             ),
             state_events=os.getenv(
-                "STATE_EVENTS_SUBJECT_TEMPLATE", DEFAULT_STATE_EVENTS_SUBJECT_TEMPLATE
+                "STATE_EVENTS_SUBJECT_TEMPLATE", EVENT_STATE_WILDCARD_SUBJECT_TEMPLATE
             ),
             chat_events=os.getenv(
-                "CHAT_EVENTS_SUBJECT_TEMPLATE", DEFAULT_CHAT_EVENTS_SUBJECT_TEMPLATE
+                "CHAT_EVENTS_SUBJECT_TEMPLATE", CHAT_WORKER_EVENTS_SUBJECT_TEMPLATE
             ),
         )
 

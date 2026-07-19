@@ -89,19 +89,21 @@ docker-compose --profile full up -d control-plane
 
 The control plane subscribes to NATS subjects for container orchestration:
 
-- **agent.control.{run_id}.start**: Triggers container creation for a run session
+- **agent.control.{run_id}.start**: Triggers container creation for a run session with run parameters (including `agent_type`, `llm_provider`, `model_name`, etc.)
 - **agent.control.{run_id}.close**: Triggers container termination for a run session
+- **agent.control.{run_id}.resume**: Triggers container recreation and resume for a run session
+- **agent.control.worker.{run_id}.ready**: Worker ready signal
 
 ### Message Flow
 
-1. Agent Service publishes `agent.control.{run_id}.start` message with run_id and repository_id
-2. Control Plane receives message and creates Docker container
+1. Agent Service publishes `agent.control.{run_id}.start` message with run_id, repository_id, project_id, agent_type, llm_provider, model_name, and other run parameters
+2. Control Plane checks for an existing running container for the run_id; if not found or dead, it creates a Docker container for the requested `agent_type`
 3. If `MOCK_DOCKER=true`, the container creation is simulated and the flow continues immediately
-4. Container starts with environment variables, worker auto-starts workflow
+4. Container starts with environment variables, worker auto-starts the workflow configured by `PYTHON_MODULE`
 
 ### Mock Mode
 
-Set `MOCK_DOCKER=true` to bypass real Docker container creation. This is used for the first-flow E2E test with the `mock-worker` container, where the worker itself simulates the agent execution.
+Set `MOCK_DOCKER=true` to bypass real Docker container creation. When enabled, the control-plane still processes the NATS message but skips the actual Docker container lifecycle, allowing the rest of the flow to be tested without a running Docker daemon.
 
 ## Configuration
 
@@ -185,7 +187,7 @@ The control plane uses the following schema:
 
 ## Current State & Goal for Personal Use
 
-**Current state:** The control-plane provides CRUD APIs for users, organizations, projects, and repositories, and it creates/terminates agent containers on NATS `agent.control.{run_id}.start`/`close` messages. The worker now clones the selected repository into `/workspace` before the workflow starts. A custom CrewAI wrapper worker type discovers available agent projects and surfaces them in the chat session, so the user can pick which multi-agent project to run. It is **demo-ready** but not production-ready for real repositories.
+**Current state:** The control-plane provides CRUD APIs for users, organizations, projects, and repositories, and it creates/terminates agent containers on NATS `agent.control.{run_id}.start`/`close`/`resume` messages. It supports four worker variants (`specialist`, `single-agent`, `crewai`, `crewai-expert`) selected via the `agent_type` run parameter and sets the corresponding Docker image and `PYTHON_MODULE` for the worker container. It is **demo-ready** but not production-ready for real repositories.
 
 **First goal:** Orchestrate agentic AI workflows in controlled isolated environments with secured remote controls, full open-source usage, and free local LLMs.
 
@@ -193,9 +195,9 @@ The control plane uses the following schema:
 
 ## Next Milestone
 
-1. **Approval workflow:** Add NATS subscription or API endpoint to receive approval decisions and propagate them to the worker.
-2. **Budget tracking:** Persist and expose `max_tokens`/`max_cost` for runs and update `cost_incurred`/`tokens_used` from worker events.
-3. **End-to-end tests:** Extend integration tests to verify the full `start` → container creation → `completed` event flow.
+1. **Budget tracking:** Persist and expose `max_tokens`/`max_cost` for runs and update `cost_incurred`/`tokens_used` from worker events.
+2. **End-to-end tests:** Extend integration tests to verify the full `start` → container creation → `completed` event flow for all worker variants.
+3. **Resource policies:** Add per-run resource limits and egress controls for production deployments.
 
 See main [README.md](../../README.md) for future goals and milestones.
 

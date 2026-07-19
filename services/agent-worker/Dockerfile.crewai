@@ -10,12 +10,6 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Copy crewai-specific code
-COPY services/agent-worker/internal/agents/crewai /app/internal/agents/crewai
-COPY services/agent-worker/internal/tools /app/internal/tools
-COPY services/agent-worker/internal/workspace /app/internal/workspace
-COPY services/agent-worker/internal/messaging /app/internal/messaging
-
 # Install only crewai-specific dependencies (minimal - no langchain/langgraph)
 RUN pip install --no-cache-dir \
     crewai>=1.3.0 \
@@ -23,6 +17,16 @@ RUN pip install --no-cache-dir \
     pexpect>=4.9.0 \
     nats-py>=2.15.0 \
     pydantic>=2.13.4
+    
+# Copy crewai-specific code
+COPY services/agent-worker/internal/agents/crewai /app/internal/agents/crewai
+COPY services/agent-worker/internal/tools /app/internal/tools
+COPY services/agent-worker/internal/workspace /app/internal/workspace
+COPY services/agent-worker/internal/messaging /app/internal/messaging
+
+# Copy shared package and install it
+COPY shared /tmp/shared
+RUN pip install /tmp/shared && rm -rf /tmp/shared
 
 # Copy common scripts
 COPY services/agent-worker/scripts/container-start.sh /app/container-start.sh

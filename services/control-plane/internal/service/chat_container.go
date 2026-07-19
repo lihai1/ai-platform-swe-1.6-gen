@@ -27,46 +27,56 @@ func NewChatContainerService(
 	}
 }
 
-// CreateSpecialistAgentContainer creates a container for specialist agent (multi-agent) mode
-func (s *ChatContainerService) CreateSpecialistAgentContainer(repoConfig orchestrator.RepositoryConfig, llmConfig orchestrator.LLMConfig) (*models.ChatContainer, error) {
-	repositoryURL := repoConfig.RepositoryURL
-	branch := repoConfig.Branch
-	runID := repoConfig.RunID
-
-	if repoConfig.RepositoryID != "" {
-		// Get repository details
-		repo, err := s.repoRepo.Get(repoConfig.RepositoryID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get repository: %w", err)
-		}
-		repositoryURL = repo.GitURL
-		branch = repo.Branch
-	} else {
+// resolveRepository fetches repository URL and branch when a repository ID is provided.
+func (s *ChatContainerService) resolveRepository(repositoryID, runID string) (string, string, error) {
+	if repositoryID == "" {
 		log.Printf("No repository_id provided for run %s, creating container without repository", runID)
+		return "", "", nil
 	}
 
-	// Update repoConfig with actual repository details
-	repoConfig.RepositoryURL = repositoryURL
-	repoConfig.Branch = branch
-
-	// Create specialist agent container via orchestrator
-	containerInfo, err := s.manager.CreateSpecialistAgentContainer(repoConfig, llmConfig)
+	repo, err := s.repoRepo.Get(repositoryID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create chat container: %w", err)
+		return "", "", fmt.Errorf("failed to get repository: %w", err)
 	}
+	return repo.GitURL, repo.Branch, nil
+}
 
-	// Save to database
-	container := &models.ChatContainer{
+// toChatContainer builds a ChatContainer model from orchestrator output and repository details.
+func (s *ChatContainerService) toChatContainer(containerInfo *orchestrator.ChatContainerInfo, runID, repositoryURL, branch string) *models.ChatContainer {
+	return &models.ChatContainer{
 		ID:            containerInfo.ID,
 		RunID:         runID,
 		ContainerID:   containerInfo.ContainerID,
 		ContainerName: containerInfo.ContainerName,
-		RepositoryURL: containerInfo.RepositoryURL,
-		Branch:        containerInfo.Branch,
+		RepositoryURL: repositoryURL,
+		Branch:        branch,
 		Status:        containerInfo.Status,
 		CreatedAt:     containerInfo.CreatedAt,
 	}
+}
 
+// CreateContainerForAgentType creates and persists a chat container for the given agent type.
+func (s *ChatContainerService) CreateContainerForAgentType(
+	agentType string,
+	repoConfig orchestrator.RepositoryConfig,
+	llmConfig orchestrator.LLMConfig,
+	runParams *orchestrator.RunParameters,
+) (*models.ChatContainer, error) {
+	runID := repoConfig.RunID
+	repositoryURL, branch, err := s.resolveRepository(repoConfig.RepositoryID, runID)
+	if err != nil {
+		return nil, err
+	}
+
+	repoConfig.RepositoryURL = repositoryURL
+	repoConfig.Branch = branch
+
+	containerInfo, err := s.manager.CreateContainerForAgentType(agentType, repoConfig, llmConfig, runParams)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create %s container: %w", agentType, err)
+	}
+
+	container := s.toChatContainer(containerInfo, runID, repositoryURL, branch)
 	if err := s.containerRepo.Create(container); err != nil {
 		return nil, fmt.Errorf("failed to save chat container: %w", err)
 	}
@@ -74,53 +84,14 @@ func (s *ChatContainerService) CreateSpecialistAgentContainer(repoConfig orchest
 	return container, nil
 }
 
+// CreateSpecialistAgentContainer creates a container for specialist agent (multi-agent) mode
+func (s *ChatContainerService) CreateSpecialistAgentContainer(repoConfig orchestrator.RepositoryConfig, llmConfig orchestrator.LLMConfig) (*models.ChatContainer, error) {
+	return s.CreateContainerForAgentType("specialist", repoConfig, llmConfig, nil)
+}
+
 // CreateSingleAgentContainer creates a container for single-agent mode
-// TODO: Make agent type selection configurable via request parameters
-// Currently hardcoded to use single-agent Docker image
 func (s *ChatContainerService) CreateSingleAgentContainer(repoConfig orchestrator.RepositoryConfig, llmConfig orchestrator.LLMConfig) (*models.ChatContainer, error) {
-	repositoryURL := repoConfig.RepositoryURL
-	branch := repoConfig.Branch
-	runID := repoConfig.RunID
-
-	if repoConfig.RepositoryID != "" {
-		// Get repository details
-		repo, err := s.repoRepo.Get(repoConfig.RepositoryID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get repository: %w", err)
-		}
-		repositoryURL = repo.GitURL
-		branch = repo.Branch
-	} else {
-		log.Printf("No repository_id provided for run %s, creating single-agent container without repository", runID)
-	}
-
-	// Update repoConfig with actual repository details
-	repoConfig.RepositoryURL = repositoryURL
-	repoConfig.Branch = branch
-
-	// Create single-agent container via orchestrator
-	containerInfo, err := s.manager.CreateSingleAgentContainer(repoConfig, llmConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create single-agent container: %w", err)
-	}
-
-	// Save to database
-	container := &models.ChatContainer{
-		ID:            containerInfo.ID,
-		RunID:         runID,
-		ContainerID:   containerInfo.ContainerID,
-		ContainerName: containerInfo.ContainerName,
-		RepositoryURL: containerInfo.RepositoryURL,
-		Branch:        containerInfo.Branch,
-		Status:        containerInfo.Status,
-		CreatedAt:     containerInfo.CreatedAt,
-	}
-
-	if err := s.containerRepo.Create(container); err != nil {
-		return nil, fmt.Errorf("failed to save single-agent container: %w", err)
-	}
-
-	return container, nil
+	return s.CreateContainerForAgentType("single-agent", repoConfig, llmConfig, nil)
 }
 
 func (s *ChatContainerService) GetContainer(runID string) (*models.ChatContainer, error) {
@@ -171,141 +142,20 @@ func (s *ChatContainerService) ListContainers() ([]*models.ChatContainer, error)
 
 // CreateSpecialistAgentContainerWithParams creates a container for specialist agent (multi-agent) mode with run parameters
 func (s *ChatContainerService) CreateSpecialistAgentContainerWithParams(repoConfig orchestrator.RepositoryConfig, llmConfig orchestrator.LLMConfig, runParams orchestrator.RunParameters) (*models.ChatContainer, error) {
-	repositoryURL := repoConfig.RepositoryURL
-	branch := repoConfig.Branch
-	runID := repoConfig.RunID
-
-	if repoConfig.RepositoryID != "" {
-		// Get repository details
-		repo, err := s.repoRepo.Get(repoConfig.RepositoryID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get repository: %w", err)
-		}
-		repositoryURL = repo.GitURL
-		branch = repo.Branch
-	} else {
-		log.Printf("No repository_id provided for run %s, creating container without repository", runID)
-	}
-
-	// Update repoConfig with actual repository details
-	repoConfig.RepositoryURL = repositoryURL
-	repoConfig.Branch = branch
-
-	// Create specialist agent container via orchestrator with params
-	containerInfo, err := s.manager.CreateSpecialistAgentContainerWithParams(repoConfig, llmConfig, runParams)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create chat container: %w", err)
-	}
-
-	// Save to database
-	container := &models.ChatContainer{
-		ID:            containerInfo.ID,
-		RunID:         runID,
-		ContainerID:   containerInfo.ContainerID,
-		ContainerName: containerInfo.ContainerName,
-		RepositoryURL: repositoryURL,
-		Branch:        branch,
-		Status:        containerInfo.Status,
-		CreatedAt:     containerInfo.CreatedAt,
-	}
-
-	if err := s.containerRepo.Create(container); err != nil {
-		return nil, fmt.Errorf("failed to save chat container: %w", err)
-	}
-
-	return container, nil
+	return s.CreateContainerForAgentType("specialist", repoConfig, llmConfig, &runParams)
 }
 
 // CreateSingleAgentContainerWithParams creates a container for single-agent mode with run parameters
 func (s *ChatContainerService) CreateSingleAgentContainerWithParams(repoConfig orchestrator.RepositoryConfig, llmConfig orchestrator.LLMConfig, runParams orchestrator.RunParameters) (*models.ChatContainer, error) {
-	repositoryURL := repoConfig.RepositoryURL
-	branch := repoConfig.Branch
-	runID := repoConfig.RunID
-
-	if repoConfig.RepositoryID != "" {
-		// Get repository details
-		repo, err := s.repoRepo.Get(repoConfig.RepositoryID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get repository: %w", err)
-		}
-		repositoryURL = repo.GitURL
-		branch = repo.Branch
-	} else {
-		log.Printf("No repository_id provided for run %s, creating single-agent container without repository", runID)
-	}
-
-	// Update repoConfig with actual repository details
-	repoConfig.RepositoryURL = repositoryURL
-	repoConfig.Branch = branch
-
-	// Create single-agent container via orchestrator with params
-	containerInfo, err := s.manager.CreateSingleAgentContainerWithParams(repoConfig, llmConfig, runParams)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create single-agent container: %w", err)
-	}
-
-	// Save to database
-	container := &models.ChatContainer{
-		ID:            containerInfo.ID,
-		RunID:         runID,
-		ContainerID:   containerInfo.ContainerID,
-		ContainerName: containerInfo.ContainerName,
-		RepositoryURL: repositoryURL,
-		Branch:        branch,
-		Status:        containerInfo.Status,
-		CreatedAt:     containerInfo.CreatedAt,
-	}
-
-	if err := s.containerRepo.Create(container); err != nil {
-		return nil, fmt.Errorf("failed to save single-agent container: %w", err)
-	}
-
-	return container, nil
+	return s.CreateContainerForAgentType("single-agent", repoConfig, llmConfig, &runParams)
 }
 
 // CreateCrewAIContainerWithParams creates a container for CrewAI mode with run parameters
 func (s *ChatContainerService) CreateCrewAIContainerWithParams(repoConfig orchestrator.RepositoryConfig, llmConfig orchestrator.LLMConfig, runParams orchestrator.RunParameters) (*models.ChatContainer, error) {
-	repositoryURL := repoConfig.RepositoryURL
-	branch := repoConfig.Branch
-	runID := repoConfig.RunID
+	return s.CreateContainerForAgentType("crewai", repoConfig, llmConfig, &runParams)
+}
 
-	if repoConfig.RepositoryID != "" {
-		// Get repository details
-		repo, err := s.repoRepo.Get(repoConfig.RepositoryID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get repository: %w", err)
-		}
-		repositoryURL = repo.GitURL
-		branch = repo.Branch
-	} else {
-		log.Printf("No repository_id provided for run %s, creating crewai container without repository", runID)
-	}
-
-	// Update repoConfig with actual repository details
-	repoConfig.RepositoryURL = repositoryURL
-	repoConfig.Branch = branch
-
-	// Create CrewAI container via orchestrator with params
-	containerInfo, err := s.manager.CreateCrewAIContainerWithParams(repoConfig, llmConfig, runParams)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create crewai container: %w", err)
-	}
-
-	// Save to database
-	container := &models.ChatContainer{
-		ID:            containerInfo.ID,
-		RunID:         runID,
-		ContainerID:   containerInfo.ContainerID,
-		ContainerName: containerInfo.ContainerName,
-		RepositoryURL: repositoryURL,
-		Branch:        branch,
-		Status:        containerInfo.Status,
-		CreatedAt:     containerInfo.CreatedAt,
-	}
-
-	if err := s.containerRepo.Create(container); err != nil {
-		return nil, fmt.Errorf("failed to save crewai container: %w", err)
-	}
-
-	return container, nil
+// CreateCrewAIExpertContainerWithParams creates a container for the CrewAI expert worker with run parameters
+func (s *ChatContainerService) CreateCrewAIExpertContainerWithParams(repoConfig orchestrator.RepositoryConfig, llmConfig orchestrator.LLMConfig, runParams orchestrator.RunParameters) (*models.ChatContainer, error) {
+	return s.CreateContainerForAgentType("crewai-expert", repoConfig, llmConfig, &runParams)
 }

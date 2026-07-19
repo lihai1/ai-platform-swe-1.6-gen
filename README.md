@@ -1,12 +1,14 @@
 # Agentic Engineering Platform
 
-An open-source orchestration framework for agentic AI workflows with isolated containerized environments. Currently supports Python single agents and CrewAI-based multi-agent systems.
+An open-source orchestration framework for agentic AI workflows with isolated containerized environments. Supports LangGraph specialist workflows, Python single agents, CrewAI projects, and a CrewAI Expert patching workflow.
 
 ## Why
 
 This project is designed for **personal, scalable, and secure use of agentic AI agents**.
 
-After **14 completed implementation phases**, the platform is **demo-ready** for personal home use. The core architecture, container isolation, Angular UI, NATS messaging, and multi-phase LangGraph workflow are implemented and runnable locally. It is **not yet production-ready** for enterprise deployment.
+After **16 completed implementation phases**, the platform is **demo-ready** for personal home use. The core architecture, container isolation, Angular UI, NATS messaging, multi-phase LangGraph workflow, and a new CrewAI Expert execution mode are implemented and runnable locally. It is **not yet production-ready** for enterprise deployment.
+
+> **What's new:** The `crewai-expert` worker variant is now available. It is a **specialized LangGraph agent** that prepares and executes a **generic CrewAI agent**: it discovers CrewAI projects in `/workspace`, inspects and patches their dependencies with human approval, and runs the project via the CrewAI CLI inside the worker container. This is the POC pattern for inspecting and running new AI examples so they can evolve into custom specialized agents. See the [CrewAI Expert Flow diagram](docs/svg/crewai-expert-flow.svg).
 
 The first goal is to **orchestrate agentic AI workflows in controlled isolated environments with the ability to use secured remote controls, full open-source usage, and free local LLMs** — each run is sandboxed in a Docker container, driven by NATS, accessible from a remote UI through a trusted VPN, and powered by Ollama for free local inference.
 
@@ -21,7 +23,7 @@ The personal-use goal is to run a stable, single-user home instance that can tak
 
 ## Current State & Goal for Personal Use
 
-**Current state:** `make clean-start` successfully starts PostgreSQL, NATS, the Go control-plane, the Python agent-service, and the Angular UI. You can chat in the UI, trigger a workflow, and observe state events streamed back through the agent-service. The worker now clones the selected repository into `/workspace` before the workflow starts. A custom CrewAI wrapper worker type discovers available agent projects and presents them in the chat session, so the user can pick which multi-agent project to run. The mock/fake LLM provider lets you run this without a GPU.
+**Current state:** `make clean-start` successfully starts PostgreSQL, NATS, the Go control-plane, the Python agent-service, and the Angular UI. You can chat in the UI, trigger a workflow, and observe state events streamed back through the agent-service. The worker clones the selected repository into `/workspace` before the workflow starts. The platform supports four worker variants (`specialist`, `single-agent`, `crewai`, and `crewai-expert`) selected in the UI. CrewAI variants discover available agent projects and present them as cards in the chat session, while `crewai-expert` adds dependency patching and approval workflows. The fake/mock LLM provider lets you run this without a GPU.
 
 **Personal-use goal:** A single-user home deployment where you can point the platform at your repositories, run agentic engineering tasks in isolated Docker containers, see real-time progress, and approve or reject sensitive actions before they are committed.
 
@@ -51,7 +53,7 @@ This repository is intended to be a strong, opinionated starter for building mic
 ## Key Features
 
 - **Ephemeral, Disposable Workers**: Each run executes in its own throwaway Docker container. The target repository is cloned from GitHub into a container-local `/workspace` — no host files are bind-mounted — so a crashed or misbehaving run leaves the host untouched and can be safely retried. (This is disposability/blast-radius containment, not yet policy-enforced sandboxing — no default-deny egress, credential isolation, or resource limits.)
-- **Multi-Agent Orchestration**: Support for Python single agents and CrewAI-based multi-agent systems, including a custom wrapper worker type that discovers available agent projects and lets the user pick one from the chat session
+- **Multi-Agent Orchestration**: Support for LangGraph specialist workflows, Python single agents, CrewAI projects, and a CrewAI Expert patching workflow, including project discovery and selection in the chat UI
 - **Real-Time Event Streaming**: SSE-based live agent activity monitoring with browser reconnection support
 - **Human-in-the-Loop Approval**: LangGraph interrupts for sensitive operations requiring human oversight
 - **Enterprise-Grade Features**: Multi-tenant user/project management, authentication, and repository integration
@@ -64,20 +66,22 @@ This repository is intended to be a strong, opinionated starter for building mic
 - Docker and Docker Compose
 - Ollama (optional, for free real LLM support)
 
-### Start
-
-```bash
-# Build containers and start all services
-make start
-```
-
-### Start Fresh (Destructive)
+### Start Fresh (Recommended)
 
 **Warning**: `make clean-start` stops all containers and destroys persistent data (PostgreSQL volumes). Use it to clear resources and start fresh.
 
 ```bash
 # Stop, clean volumes, rebuild, and start
 make clean-start
+```
+
+### Start (Non-destructive)
+
+If you already have data and just want to start the stack:
+
+```bash
+# Build containers and start all services
+make start
 ```
 
 ### Stop
@@ -95,7 +99,7 @@ make mock-llm-start
 
 ### Development Mode (Run Services Locally)
 
-**Use this for testing changed code locally** - run specific services locally while others run in docker-compose:
+**Use this for testing changed code locally** — run specific services locally while others run in docker-compose:
 
 ```bash
 # Run web UI locally, other services in docker-compose
@@ -243,23 +247,45 @@ This platform is implemented as a **monorepo with 4 microservices**:
 
 - **Control Plane** (Go): Service managing users, organizations, projects, and repositories. Accessed internally via agent-service proxy. See [services/control-plane/README.md](services/control-plane/README.md).
 - **Agent Service** (Python): FastAPI service with ChatKit integration, NATS messaging, and proxy endpoints for control-plane APIs. Acts as single entry point for all UI requests. See [services/agent-service/README.md](services/agent-service/README.md).
-- **Agent Worker** (Python): CrewAI-based worker for isolated LangGraph workflow execution, communicating only via NATS. See [services/agent-worker/README.md](services/agent-worker/README.md).
+- **Agent Worker** (Python): Isolated workflow execution inside containers. Four variants are built from the same codebase. See [services/agent-worker/README.md](services/agent-worker/README.md).
 - **Web UI** (Angular): Angular 22+ application with standalone components. All API requests routed through agent-service proxy.
+
+The four agent-worker variants are:
+
+| Variant | Framework | Purpose |
+| --- | --- | --- |
+| `specialist` | LangGraph | Multi-phase engineering workflow with approvals and tool use |
+| `single-agent` | LangGraph | Simplified single-agent workflow |
+| `crewai` | CrewAI | Run existing CrewAI projects discovered in `/workspace` |
+| `crewai-expert` | CrewAI | Run CrewAI projects with dependency inspection, patching, and human approval |
 
 ### System Flow
 
 ```mermaid
 graph LR
-    UI[Angular UI] --> AgentService[Agent Service]
-    AgentService --> NATS[NATS]
-    NATS --> ControlPlane[Control Plane]
-    ControlPlane --> Worker[Agent Worker]
-    Worker --> NATS
-    NATS --> AgentService
-    AgentService --> UI
-    AgentService --> DB[(PostgreSQL)]
-    ControlPlane --> DB
+    UI[Angular UI] -->|HTTP / SSE| AgentService[Agent Service]
+    AgentService -->|control commands| NATS[NATS JetStream]
+    NATS -->|agent.control.*| ControlPlane[Control Plane]
+    ControlPlane -->|create container| Docker[Docker Workspace]
+    Docker --> Worker[Agent Worker]
+    Worker -->|state / chat events| NATS
+    NATS -->|agent.user.*.events / agent.user.*.chat.*| AgentService
+    AgentService -->|SSE| UI
+    AgentService -->|chat threads / items| DB[(PostgreSQL)]
+    ControlPlane -->|users / projects / repos| DB
 ```
+
+### CrewAI Expert Flow
+
+The `crewai-expert` variant is a **specialized LangGraph agent** that prepares and executes a **generic CrewAI agent**. It discovers a CrewAI project in `/workspace`, inspects and patches its dependencies with human approval, and runs the project via the CrewAI CLI inside the worker container. This pattern lets the platform inspect and run new AI examples as a stepping stone to custom specialized agents.
+
+![CrewAI Expert Flow](docs/svg/crewai-expert-flow.svg)
+
+1. **Prepare CrewAI Project** — resolve the project, inspect dependencies, generate patches, wait for approval, apply patches, and sync dependencies.
+2. **Run CrewAI CLI** — execute `crewai run` as a pexpect subprocess and stream stdout/stderr as state events.
+3. **Terminal states** — `Completed`, `Failed`, or `Cancelled`.
+
+See the Mermaid source at [`docs/crewai-expert-flow.mmd`](docs/crewai-expert-flow.mmd) and the detailed walkthrough in [`docs/COMPLETE_FLOW.md`](docs/COMPLETE_FLOW.md).
 
 ### Scalability Considerations
 
@@ -285,7 +311,7 @@ UI → Agent Service → NATS → Control Plane → per-run Docker worker
 Worker → NATS → Agent Service → UI (SSE)
 ```
 
-Execution modes currently wired into the worker model: a **simple/custom worker** (`single-agent`), a **LangGraph specialist workflow** (`specialist`), and **CrewAI projects** (`crewai`).
+Execution modes currently wired into the worker model: a **simple/custom worker** (`single-agent`), a **LangGraph specialist workflow** (`specialist`), **CrewAI projects** (`crewai`), and a **CrewAI Expert patching workflow** (`crewai-expert`).
 
 > Status note: each run executes in an **ephemeral, disposable Docker container**. Source is cloned from GitHub into a container-local `/workspace` with **no host bind mounts**, so a crashed run causes no host-side harm and can be retried safely. This gives good blast-radius containment, but it is **not** policy-enforced sandboxing yet — there is no default-deny egress, credential isolation, declarative filesystem policy, or strict per-run resource policy. That stricter layer is where OpenShell/NemoClaw would fit later.
 
@@ -324,7 +350,8 @@ ai-agents-platform/
 │   ├── control-plane/       # Go 1.26+ control plane service
 │   ├── agent-service/       # Python 3.12+ API and messaging
 │   └── agent-worker/        # Python worker for isolated workflows
-├── shared/                  # Shared utilities and test tools
+├── shared/                  # Shared libraries and test tools
+│   └── agentic_shared/      # NATS subjects/streams, test helpers, shared schemas
 ├── docs/                    # Documentation and diagrams
 ├── PROGRESS.md              # Implementation progress
 ├── IMPLEMENTATION_PLAN.md   # Detailed implementation plan
@@ -335,6 +362,7 @@ ai-agents-platform/
 
 - [docs/README.md](docs/README.md) - Architecture diagrams and how to regenerate them
 - [docs/COMPLETE_FLOW.md](docs/COMPLETE_FLOW.md) - Complete chat-to-agent flow
+- [docs/crewai-expert-flow.mmd](docs/crewai-expert-flow.mmd) / [docs/svg/crewai-expert-flow.svg](docs/svg/crewai-expert-flow.svg) - Simplified `crewai-expert` worker state-graph flow
 - [PROGRESS.md](PROGRESS.md) - Implementation phases, architecture refactoring, and current status
 - [services/control-plane/README.md](services/control-plane/README.md) - Control plane service
 - [services/agent-service/README.md](services/agent-service/README.md) - Agent service

@@ -2,8 +2,10 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 
+	internalnats "github.com/agentic-engineering/control-plane/internal/nats"
 	"github.com/agentic-engineering/control-plane/internal/orchestrator"
 	"github.com/agentic-engineering/control-plane/internal/repository"
 	"github.com/agentic-engineering/control-plane/internal/service"
@@ -19,7 +21,7 @@ type ChatStartMessage struct {
 	UserID         string  `json:"user_id"`
 	Task           string  `json:"task"`
 	MockMode       bool    `json:"mock_mode"`
-	AgentType      string  `json:"agent_type"`   // "multi-agent" or "single-agent"
+	AgentType      string  `json:"agent_type"`   // "multi-agent", "single-agent", "crewai", or "crewai-expert"
 	LLMProvider    string  `json:"llm_provider"` // "fake", "ollama", "openai", "anthropic"
 	ModelName      string  `json:"model_name"`   // Model name for the LLM provider
 	APIKey         string  `json:"api_key"`      // API key for non-Ollama providers
@@ -45,7 +47,7 @@ type ChatResumeMessage struct {
 	RepositoryID  string `json:"repository_id"`
 	ProjectID     string `json:"project_id"`
 	MockMode      bool   `json:"mock_mode"`
-	AgentType     string `json:"agent_type"`
+	AgentType     string `json:"agent_type"` // "multi-agent", "single-agent", "crewai", or "crewai-expert"
 	LLMProvider   string `json:"llm_provider"`
 	ModelName     string `json:"model_name"`
 	APIKey        string `json:"api_key"`
@@ -65,26 +67,42 @@ func HandleChatStart(msg *nats.Msg, chatContainerService *service.ChatContainerS
 	log.Printf("[NATS RECEIVE] Chat start payload: %s", string(msg.Data))
 	log.Printf("[NATS RECEIVE] Run ID: %s, Repository ID: %s, Mock Mode: %v, Agent Type: %s, LLM Provider: %s", chatMsg.RunID, chatMsg.RepositoryID, chatMsg.MockMode, chatMsg.AgentType, chatMsg.LLMProvider)
 
-	// Get repository details for logging when a repository_id is provided
-	if chatMsg.RepositoryID != "" {
-		repo, err := repoRepo.Get(chatMsg.RepositoryID)
-		if err != nil {
-			log.Printf("[NATS RECEIVE] Failed to get repository for run %s: %v", chatMsg.RunID, err)
+	// Check if there's an existing container for this run_id
+	existingContainer, getErr := chatContainerService.GetContainer(chatMsg.RunID)
+	if getErr == nil && existingContainer != nil {
+		log.Printf("[NATS RECEIVE] Found existing container for run %s, checking if it's alive", chatMsg.RunID)
+
+		// Check if the container is still running
+		containerStatus, statusErr := containerManager.GetChatContainerStatus(existingContainer.ContainerID)
+		if statusErr != nil {
+			log.Printf("[NATS RECEIVE] Failed to get container status for run %s: %v", chatMsg.RunID, statusErr)
+		} else if !containerStatus.Running {
+			log.Printf("[NATS RECEIVE] Container for run %s is not running (status: %s), cleaning up and recreating", chatMsg.RunID, containerStatus.Status)
+
+			// Stop and remove the dead container
+			if existingContainer.ContainerID != "" {
+				if stopErr := containerManager.StopWorker(existingContainer.ContainerID); stopErr != nil {
+					log.Printf("[NATS RECEIVE] Failed to stop dead container for run %s: %v", chatMsg.RunID, stopErr)
+				} else {
+					log.Printf("[NATS RECEIVE] Successfully stopped dead container for run %s", chatMsg.RunID)
+				}
+			}
+
+			// Remove the database record
+			if removeErr := chatContainerService.RemoveContainer(chatMsg.RunID); removeErr != nil {
+				log.Printf("[NATS RECEIVE] Failed to remove container record for run %s: %v", chatMsg.RunID, removeErr)
+			} else {
+				log.Printf("[NATS RECEIVE] Successfully removed container record for run %s", chatMsg.RunID)
+			}
+		} else {
+			log.Printf("[NATS RECEIVE] Container for run %s is still running, reusing existing container", chatMsg.RunID)
 			return
 		}
-		log.Printf("[NATS RECEIVE] Repository URL for run %s: %s", chatMsg.RunID, repo.GitURL)
-	} else {
-		log.Printf("[NATS RECEIVE] No repository_id provided for run %s, skipping repository validation", chatMsg.RunID)
 	}
 
-	// Create a chat container record (real container or mock record)
-	// TODO: Make agent type selection more robust with validation
-	// Currently defaults to multi-agent if not specified
-	var err error
 	repoConfig := orchestrator.RepositoryConfig{
 		RunID:        chatMsg.RunID,
 		RepositoryID: chatMsg.RepositoryID,
-		Credentials:  nil,
 	}
 	llmConfig := orchestrator.LLMConfig{
 		MockMode:    chatMsg.MockMode,
@@ -103,22 +121,16 @@ func HandleChatStart(msg *nats.Msg, chatContainerService *service.ChatContainerS
 		MaxRepairCount:  chatMsg.MaxRepairCount,
 	}
 
-	if chatMsg.AgentType == "single-agent" {
-		_, err = chatContainerService.CreateSingleAgentContainerWithParams(repoConfig, llmConfig, runParams)
-		log.Printf("[NATS RECEIVE] Creating single-agent container for run %s with LLM provider %s", chatMsg.RunID, chatMsg.LLMProvider)
-	} else if chatMsg.AgentType == "crewai" {
-		_, err = chatContainerService.CreateCrewAIContainerWithParams(repoConfig, llmConfig, runParams)
-		log.Printf("[NATS RECEIVE] Creating crewai container for run %s", chatMsg.RunID)
-	} else {
-		// Default to multi-agent mode
-		_, err = chatContainerService.CreateSpecialistAgentContainerWithParams(repoConfig, llmConfig, runParams)
-		log.Printf("[NATS RECEIVE] Creating multi-agent container for run %s with LLM provider %s", chatMsg.RunID, chatMsg.LLMProvider)
+	agentType := chatMsg.AgentType
+	if agentType == "" {
+		agentType = "specialist"
 	}
-
+	_, err := chatContainerService.CreateContainerForAgentType(agentType, repoConfig, llmConfig, &runParams)
 	if err != nil {
 		log.Printf("[NATS RECEIVE] Failed to create container for run %s: %v", chatMsg.RunID, err)
 		return
 	}
+	log.Printf("[NATS RECEIVE] Creating %s container for run %s", agentType, chatMsg.RunID)
 
 	if chatMsg.MockMode {
 		log.Printf("[NATS RECEIVE] Mock mode enabled for run %s; mock-worker will handle this run", chatMsg.RunID)
@@ -181,24 +193,9 @@ func HandleChatResume(msg *nats.Msg, chatContainerService *service.ChatContainer
 	log.Printf("[NATS RECEIVE] Chat resume payload: %s", string(msg.Data))
 	log.Printf("[NATS RECEIVE] Run ID: %s, Repository ID: %s, Mock Mode: %v, Agent Type: %s, LLM Provider: %s", chatMsg.RunID, chatMsg.RepositoryID, chatMsg.MockMode, chatMsg.AgentType, chatMsg.LLMProvider)
 
-	// Get repository details for logging when a repository_id is provided
-	if chatMsg.RepositoryID != "" {
-		repo, err := repoRepo.Get(chatMsg.RepositoryID)
-		if err != nil {
-			log.Printf("[NATS RECEIVE] Failed to get repository for run %s: %v", chatMsg.RunID, err)
-			return
-		}
-		log.Printf("[NATS RECEIVE] Repository URL for run %s: %s", chatMsg.RunID, repo.GitURL)
-	} else {
-		log.Printf("[NATS RECEIVE] No repository_id provided for run %s, skipping repository validation", chatMsg.RunID)
-	}
-
-	// Create a new chat container record (real container or mock record)
-	var err error
 	repoConfig := orchestrator.RepositoryConfig{
 		RunID:        chatMsg.RunID,
 		RepositoryID: chatMsg.RepositoryID,
-		Credentials:  nil,
 	}
 	llmConfig := orchestrator.LLMConfig{
 		MockMode:    chatMsg.MockMode,
@@ -217,19 +214,16 @@ func HandleChatResume(msg *nats.Msg, chatContainerService *service.ChatContainer
 		MaxRepairCount:  2,  // maxRepairCount default
 	}
 
-	if chatMsg.AgentType == "single-agent" {
-		_, err = chatContainerService.CreateSingleAgentContainerWithParams(repoConfig, llmConfig, runParams)
-		log.Printf("[NATS RECEIVE] Recreating single-agent container for run %s with LLM provider %s", chatMsg.RunID, chatMsg.LLMProvider)
-	} else {
-		// Default to multi-agent mode
-		_, err = chatContainerService.CreateSpecialistAgentContainerWithParams(repoConfig, llmConfig, runParams)
-		log.Printf("[NATS RECEIVE] Recreating multi-agent container for run %s with LLM provider %s", chatMsg.RunID, chatMsg.LLMProvider)
+	agentType := chatMsg.AgentType
+	if agentType == "" {
+		agentType = "specialist"
 	}
-
+	_, err := chatContainerService.CreateContainerForAgentType(agentType, repoConfig, llmConfig, &runParams)
 	if err != nil {
 		log.Printf("[NATS RECEIVE] Failed to recreate container for run %s: %v", chatMsg.RunID, err)
 		return
 	}
+	log.Printf("[NATS RECEIVE] Recreating %s container for run %s", agentType, chatMsg.RunID)
 
 	if chatMsg.MockMode {
 		log.Printf("[NATS RECEIVE] Mock mode enabled for run %s; mock-worker will handle this run", chatMsg.RunID)
@@ -238,4 +232,28 @@ func HandleChatResume(msg *nats.Msg, chatContainerService *service.ChatContainer
 	}
 
 	log.Printf("[NATS RECEIVE] Worker container restarted and will publish ready signal for run %s", chatMsg.RunID)
+}
+
+// CleanNATSMessageBus purges the known agent JetStream streams so the
+// control-plane starts from a clean state and does not process stale messages.
+func CleanNATSMessageBus(js nats.JetStreamContext) int {
+	log.Println("Cleaning NATS message bus...")
+
+	streams := internalnats.AllStreams()
+	cleaned := 0
+	for _, stream := range streams {
+		if err := js.PurgeStream(stream); err != nil {
+			if errors.Is(err, nats.ErrStreamNotFound) {
+				log.Printf("NATS stream %s not found, skipping", stream)
+				continue
+			}
+			log.Printf("Failed to purge NATS stream %s: %v", stream, err)
+			continue
+		}
+		log.Printf("Purged NATS stream %s", stream)
+		cleaned++
+	}
+
+	log.Printf("Cleaned %d NATS stream(s)", cleaned)
+	return cleaned
 }

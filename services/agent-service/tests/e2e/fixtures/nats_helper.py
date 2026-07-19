@@ -5,6 +5,15 @@ import logging
 from typing import Optional, Dict, Any, Callable
 from nats.aio.client import Client as NATSClient
 from nats.errors import Error as NATSError
+from agentic_shared.nats_subjects import (
+    format_event_state,
+    format_event_state_wildcard,
+    CONTROL_WILDCARD_SUBJECT,
+    CHAT_WILDCARD_SUBJECT,
+    EVENT_WILDCARD_SUBJECT,
+    STREAM_AGENT_CHAT,
+    STREAM_AGENT_EVENTS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +38,8 @@ class NATSTestHelper:
             # Create streams if they don't exist
             try:
                 await self.js.add_stream(
-                    name="AGENT_CHAT",
-                    subjects=["agent.user.*.chat.>"],
+                    name=STREAM_AGENT_CHAT,
+                    subjects=[CHAT_WILDCARD_SUBJECT],
                     description="Agent chat stream for user events",
                     retention="limits",
                     max_age=86400,
@@ -42,8 +51,8 @@ class NATSTestHelper:
             
             try:
                 await self.js.add_stream(
-                    name="AGENT_EVENTS",
-                    subjects=["agent.user.*.events.>"],
+                    name=STREAM_AGENT_EVENTS,
+                    subjects=[EVENT_WILDCARD_SUBJECT],
                     description="Agent event stream",
                     retention="limits",
                     max_age=86400,
@@ -63,7 +72,7 @@ class NATSTestHelper:
         if not self.nc:
             raise RuntimeError("NATS not connected")
         
-        subject = f"agent.user.{user_id}.events.{run_id}.state.>"
+        subject = format_event_state_wildcard(user_id, run_id)
         self.collected_events[run_id] = []
         
         async def event_handler(msg):
@@ -102,7 +111,7 @@ class NATSTestHelper:
                 logger.error(f"[NATS TEST] Error processing control start: {e}")
         
         # Subscribe to agent.control.> to catch all control messages
-        sub = await self.nc.subscribe("agent.control.>", cb=chat_start_handler)
+        sub = await self.nc.subscribe(CONTROL_WILDCARD_SUBJECT, cb=chat_start_handler)
         self.subscriptions.append(sub)
         logger.info("Subscribed to agent.control.> messages")
     
@@ -111,7 +120,7 @@ class NATSTestHelper:
         if not self.js:
             raise RuntimeError("NATS JetStream not connected")
         
-        subject = f"agent.user.{user_id}.events.{run_id}.state.started"
+        subject = format_event_state(user_id, run_id, "started")
         message = {
             "event_type": "started",
             "run_id": run_id,
@@ -128,7 +137,7 @@ class NATSTestHelper:
         if not self.js:
             raise RuntimeError("NATS JetStream not connected")
         
-        subject = f"agent.user.{user_id}.events.{run_id}.state.completed"
+        subject = format_event_state(user_id, run_id, "completed")
         message = {
             "event_type": "completed",
             "run_id": run_id,
@@ -146,7 +155,7 @@ class NATSTestHelper:
         if not self.js:
             raise RuntimeError("NATS JetStream not connected")
         
-        subject = f"agent.user.{user_id}.events.{run_id}.state.progress"
+        subject = format_event_state(user_id, run_id, "progress")
         event_message = {
             "event_type": "progress",
             "run_id": run_id,

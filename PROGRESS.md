@@ -2,22 +2,25 @@
 
 ## Executive Summary
 
-**Status:** 15/15 phases complete (100%)
+**Status:** 16/16 phases complete (100%)
 
-The Agentic Engineering Platform is a production-ready microservices system for orchestrating agentic AI workflows in isolated containerized environments. The platform supports Python single agents and CrewAI-based multi-agent systems with real-time event streaming, human-in-the-loop approval, and enterprise-grade features.
+The Agentic Engineering Platform is a demo-ready microservices system for orchestrating agentic AI workflows in isolated containerized environments. The platform supports LangGraph specialist workflows, Python single agents, CrewAI projects, and a new CrewAI Expert patching workflow, with real-time event streaming, human-in-the-loop approval, and enterprise-grade features.
 
 **Key Achievements:**
-- Complete microservices architecture (Go control-plane, Python agent-service, Python agent-worker, Angular UI)
-- NATS JetStream messaging with durable consumers for reliable service communication
-- LangGraph workflow execution with 15-state state machine
+- Complete microservices architecture (Go control-plane, Python agent-service, Python agent-worker variants, Angular UI)
+- NATS JetStream messaging with durable consumers and separate control/state/chat streams
+- LangGraph workflow execution with 15-state state machine (specialist/single-agent variants)
+- CrewAI project execution with project discovery and real-time output streaming
+- CrewAI Expert workflow with dependency patching, project selection, and approval checkpoints
 - Docker-based workspace isolation with resource limits
 - Real-time SSE streaming for live agent activity monitoring
-- Human approval workflow with LangGraph interrupts
+- Human approval workflow with LangGraph interrupts and chat approval events
 - PostgreSQL-backed persistence for all data
 - Comprehensive test coverage (integration and E2E tests)
 
 **Current State:**
 - `make clean-start` successfully starts the full stack
+- UI configuration modal allows selecting one of four worker variants (`specialist`, `single-agent`, `crewai`, `crewai-expert`)
 - Demo-ready for personal home use
 - Not yet production-ready for enterprise deployment
 
@@ -25,6 +28,7 @@ The Agentic Engineering Platform is a production-ready microservices system for 
 - Rate limiter implementation (Redis-based)
 - User authentication UI components
 - Kubernetes deployment manifests
+- Budget/cost enforcement during LLM calls
 
 ## Completed Phases
 
@@ -591,6 +595,28 @@ The Agentic Engineering Platform is a production-ready microservices system for 
 - `services/agent-worker/tests/integration/single_agent_nats_flow_test.py` (single-agent tests)
 - `services/agent-worker/internal/agents/crewai/tests/integration/test_crewai_worker_flow.py` (CrewAI tests)
 
+### Phase 16: CrewAI Expert Workflow ✅
+
+**Deliverables Completed:**
+- ✅ New `crewai-expert` worker variant with dependency patching and approval workflow
+- ✅ `Dockerfile.crewai-expert` and `pyproject.toml` optional extras
+- ✅ LangGraph-based state machine for project selection, dependency install, patch generation, and human approval
+- ✅ CrewAI Expert components: `graph.py`, `nodes.py`, `state.py`, `models.py`, `approvals.py`, `dependency_tools.py`, `patch_tools.py`, `project_tools.py`, `worker.py`, `main.py`
+- ✅ Integration tests (`services/agent-worker/tests/integration/test_crewai_expert_flow.py`)
+- ✅ Unit tests (`services/agent-worker/internal/agents/crewai-expert/tests/unit/`)
+- ✅ Control-plane support for `agent_type: crewai-expert` container creation
+- ✅ UI `chat-config` option to select `crewai-expert`
+
+**Acceptance Criteria Met:**
+- ✅ CrewAI Expert worker container builds successfully
+- ✅ Worker discovers CrewAI projects and streams them as selectable cards
+- ✅ Dependency installation and patch generation run inside the container
+- ✅ Approval checkpoints pause execution and resume on user decision
+- ✅ NATS state and chat events route correctly through agent-service to the UI
+- ✅ Integration tests cover the full CrewAI Expert flow
+
+---
+
 **Files Modified:**
 - `services/agent-worker/README.md` (multi-agent documentation)
 - `services/agent-worker/internal/messaging/nats_streams.py` (CrewAI stream configs)
@@ -649,7 +675,7 @@ The Agentic Engineering Platform is a production-ready microservices system for 
 
 ## Overall Progress
 
-**Completed:** 15/15 phases (100%)
+**Completed:** 16/16 phases (100%)
 **In Progress:** 0 phases
 **Remaining:** 0 phases (0%)
 
@@ -742,52 +768,54 @@ Implement complete user authentication flow with login/register UI components, r
 
 ## Conclusion
 
-The Agentic Engineering Platform has successfully completed all 14 planned phases, delivering a comprehensive microservices system for agentic AI workflow orchestration. The platform is demo-ready for personal home use and provides a strong foundation for future enhancements including rate limiting, improved authentication, and Kubernetes deployment support.
+The Agentic Engineering Platform has successfully completed all 16 planned phases, delivering a comprehensive microservices system for agentic AI workflow orchestration. The platform is demo-ready for personal home use and provides a strong foundation for future enhancements including rate limiting, improved authentication, budget/cost enforcement, and Kubernetes deployment support.
 
-## Architecture & Flow Details (from README)
+## Architecture & Flow Details
 
-## Agent Container Creation Flow
+### Agent Container Creation Flow
 
-The platform now supports complete end-to-end agent container creation with a simplified control flow:
+The current end-to-end flow is:
 
-1. **User Chat Message** → Agent Service receives chat request via `POST /chatkit/`
-2. **SSE Stream Initiated** → `AegisChatKitServer.respond()` returns an SSE stream
-3. **Container Creation** → Agent Service publishes `agent.control.{run_id}.start` to NATS with all run parameters
-4. **Control Plane** → Receives `agent.control.{run_id}.start`, creates container with environment variables
-5. **Worker Auto-Start** → Container starts, worker reads run parameters from environment and auto-starts workflow
-6. **State Events** → Worker publishes state events to `agent.events.{run_id}.{event_type}`
-7. **Event Streaming** → Agent Service receives events via global event stream and yields as ChatKit SSE events
-8. **UI Rendering** → Angular `chat.component.ts` parses SSE events and updates the chat UI
+1. **User Chat Message / Config** → `ChatConfigComponent` collects agent type, LLM provider, model, API key, and mock mode; `ChatComponent` sends `POST /api/chatkit/`.
+2. **Thread Creation/Reuse** → `AegisChatKitServer` creates or reuses a thread ID stored in the agent-service PostgreSQL schema (`agent.chatkit_threads`).
+3. **SSE Stream Initiated** → `AegisChatKitServer.respond()` returns a `StreamingResponse` to the UI and creates an in-memory event stream via `internal/event_streams.py`.
+4. **Container Creation** → `NatsBridge.publish_agent_start` publishes `agent.control.{run_id}.start` with all run parameters, including `agent_type`, `llm_provider`, `model_name`, and `mock_mode`.
+5. **Control Plane** → Receives `agent.control.{run_id}.start`, reuses an existing running container or creates a new one via `CreateContainerForAgentType`, sets `AGENT_TYPE` and `PYTHON_MODULE`, and starts the worker.
+6. **Worker Auto-Start** → The container's startup script clones the repository into `/workspace`, then runs the worker module configured by `PYTHON_MODULE`.
+7. **State + Chat Events** → The worker publishes state events to `agent.user.{uid}.events.{rid}.state.{event_type}` and chat output events to `agent.user.{uid}.chat.{rid}.worker.events`.
+8. **Event Streaming** → Agent-service handlers push events into the per-run stream; `AegisChatKitServer` maps them to ChatKit-compatible SSE events (`progress_update`, `thread.item.done`).
+9. **UI Rendering** → Angular `chat.component.ts` parses SSE events, updates the chat UI, renders project cards for CrewAI variants, and shows approval options when needed.
 
 ### Control Signals
 
 All control signals use the unified `agent.control.*` pattern:
-- `agent.control.{run_id}.start` - Start run with all parameters (user_id, task, project_id, etc.)
+- `agent.control.{run_id}.start` - Start run with all parameters (`user_id`, `task`, `project_id`, `agent_type`, `llm_provider`, etc.)
 - `agent.control.{run_id}.close` - Close run (stop & remove container)
 - `agent.control.{run_id}.resume` - Resume run (recreate container)
+- `agent.control.worker.{run_id}.ready` - Worker ready signal
 
-### Worker Auto-Start
+### Worker Variants
 
-The worker no longer listens to NATS commands. Instead:
-- Worker reads run parameters from environment variables (USER_ID, TASK, PROJECT_ID, etc.)
-- Worker auto-starts the workflow immediately on container startup
-- This eliminates the need for a separate `run.start` command
+The control-plane can spawn four worker images built from `services/agent-worker/`:
+- `specialist` — multi-phase LangGraph workflow
+- `single-agent` — simplified single-agent LangGraph workflow
+- `crewai` — CrewAI project discovery and execution with pexpect
+- `crewai-expert` — CrewAI with dependency patching, project selection, and approval checkpoints
 
 ### Event Streaming
 
-Worker publishes state events to:
-- `agent.user.{uid}.events.{rid}.state.{event_type}` - State transition events
+Worker publishes events to:
+- `agent.user.{uid}.events.{rid}.state.{event_type}` — state transition events
+- `agent.user.{uid}.chat.{rid}.worker.events` — worker chat output events (`progress_update`, `thread.item.done`)
 
-Agent Service subscribes to global event stream and forwards to UI via SSE.
+The agent-service subscribes to both patterns, bridges them into the per-run SSE stream, and forwards them to the Angular UI.
 
 ### Current Limitations
 
-- **Memory Checkpointer**: Using in-memory checkpointer instead of PostgreSQL (temporary workaround for LangGraph API issues)
-- **Mock Docker Mode**: Container creation is simulated when `MOCK_DOCKER=true` (no actual Docker containers)
-- **Mock Responses**: The `mock-worker` returns predefined responses (no actual LLM calls)
-- **Icon Validation**: Fixed invalid `loader` icon literal by mapping it to `agent`
-
-These limitations are acceptable for testing the message flow and can be addressed in future iterations.
+- **Budget/Cost Enforcement**: `max_tokens`/`max_cost` fields exist but are not enforced during LLM calls.
+- **Rate Limiting**: No API rate limiting yet.
+- **Kubernetes**: Only Docker Compose deployment is implemented.
+- **Authentication UI**: Login/register UI exists but `DISABLE_AUTH=true` is common in local development.
 
 ## Phase 13: Architecture Refactoring - Service Separation
 
@@ -795,29 +823,16 @@ In Phase 13, the architecture was refactored to properly separate concerns betwe
 
 ### Key Changes
 
-- **Removed LangGraph workflow execution code from agent-service**: All workflow execution logic (graph, nodes, router, state, checkpointer, approvals) was moved to agent-worker
-- **agent-service now handles**: HTTP API, NATS messaging, SSE streaming, PostgreSQL store
-- **agent-worker now handles**: LangGraph workflow execution, real agent implementations, workspace operations
-- **Shared library**: `internal/agents/` remains a shared library used by both services for specialist agents
-- **Event streaming infrastructure**: Moved `event_streams.py` from `internal/workflow/` to `internal/event_streams.py` for clarity
-
-**Future Consideration:** The specialist agent system (11+ agents with 15-state LangGraph workflow) framework is implemented but not yet tested end-to-end. Considering integration with CrewAI for specialist agent orchestration to leverage its production-ready multi-agent collaboration patterns.
+- **Removed LangGraph workflow execution code from agent-service**: All workflow execution logic (graph, nodes, router, state, checkpointer, approvals) was moved to agent-worker.
+- **agent-service now handles**: HTTP API, NATS messaging, SSE streaming, PostgreSQL chat store.
+- **agent-worker now handles**: LangGraph/CrewAI workflow execution, real agent implementations, workspace operations.
+- **Shared library**: `internal/agents/` remains a shared library used by both services.
+- **Event streaming infrastructure**: `internal/event_streams.py` bridges NATS events to the SSE stream.
 
 ### Architecture Benefits
 
-- **Clear separation of concerns**: API layer (agent-service) is completely separate from execution layer (agent-worker)
-- **Scalability**: Worker processes can be scaled independently of the API service
-- **Maintainability**: Workflow execution code is isolated to the worker service
-- **Testing**: Each service can be tested independently
-
-### Message Flow
-
-1. **User Chat Message** → Agent Service receives chat request via `POST /chatkit/`
-2. **SSE Stream Initiated** → `AegisChatKitServer.respond()` returns an SSE stream
-3. **Container Creation** → Agent Service publishes `agent.control.{run_id}.start` to NATS with all run parameters
-4. **Control Plane** → Receives `agent.control.{run_id}.start`, creates container with environment variables
-5. **Worker Auto-Start** → Container starts, worker reads run parameters from environment and auto-starts workflow
-6. **State Events** → Worker publishes state events to `agent.user.{uid}.events.{rid}.state.{event_type}`
-7. **Event Streaming** → Agent Service receives events via global event stream and yields as ChatKit SSE events
-8. **UI Rendering** → Angular `chat.component.ts` parses SSE events and updates the chat UI
+- **Clear separation of concerns**: API layer (agent-service) is completely separate from execution layer (agent-worker).
+- **Scalability**: Worker containers can be scaled independently of the API service.
+- **Maintainability**: Workflow execution code is isolated to the worker service.
+- **Testing**: Each service can be tested independently.
 

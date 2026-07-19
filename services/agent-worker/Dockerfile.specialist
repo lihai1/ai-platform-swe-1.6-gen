@@ -1,4 +1,4 @@
-FROM agentic-agent-worker-base-builder:latest
+FROM agentic-agents-platform-agent-worker-base-builder:latest
 
 # Copy specialist-specific code
 COPY services/agent-worker/internal/agents/specialist /app/internal/agents/specialist

@@ -7,13 +7,14 @@ This directory contains UML and sequence diagrams for the SWE-1.6 Agentic Engine
 - **`architecture-component-diagram.mmd`** - High-level system architecture showing all components and their interactions
   - Client Layer (Angular Web UI - single entry point via Agent Service)
   - API Layer (Go Control Plane for resource management/container orchestration, Python Agent Service for proxy/auth/chatkit)
-  - Worker Layer (CrewAI-based Python Agent Worker)
-  - Messaging Layer (NATS JetStream with durable consumers)
+  - Worker Layer (Python Agent Worker with four variants: `specialist`, `single-agent`, `crewai`, `crewai-expert`)
+  - Messaging Layer (NATS JetStream with durable consumers; separate control, state event, and chat/user event streams)
   - Data Layer (PostgreSQL)
-  - Execution Layer (Docker Workspaces)
+  - Execution Layer (Docker Workspaces spawned by the Control Plane)
   - External Services (OpenAI, Anthropic, Ollama)
 
 - **`architecture-simple-flow.mmd`** - Simplified flow diagram showing the core request/event flow between components
+- **`crewai-expert-flow.mmd`** - Simplified `crewai-expert` flow showing UI → worker → CrewAI CLI command → worker run state → UI
 
 ## Sequence Diagrams
 
@@ -101,18 +102,19 @@ These diagrams are written in Mermaid format. You can view them using:
 
 The platform follows a microservices architecture with a single entry point pattern:
 
-- **Control Plane (Go)**: Manages users, organizations, projects, and repositories. Subscribes to NATS for chat lifecycle events (agent.control.{run_id}.start, agent.control.{run_id}.close) to manage agent containers. Accessed internally via agent-service proxy for UI requests.
-- **Agent Service (Python)**: Handles ChatKit interactions, NATS messaging, and acts as single entry point for all UI requests. Provides proxy endpoints for control-plane APIs (auth, projects, repositories). Publishes NATS messages for chat start/close and subscribes to agent state events to update chat records.
-- **Web UI (Angular)**: Provides user interface for chat and workflow monitoring. All API requests routed through agent-service proxy configuration.
-- **NATS JetStream with Durable Consumers**: Provides reliable messaging between services. Uses user-scoped subject patterns for per-user routing and durable consumers for message persistence and recovery.
-- **PostgreSQL**: Persistent storage for application data, checkpoints, events, and chat containers.
-- **Docker Workspaces**: Isolated execution environments for agent operations, managed by control plane via NATS.
-- **LangGraph**: Orchestrates the multi-phase engineering workflow within agent containers.
-- **LangSmith**: Distributed tracing for LLM operations.
+- **Control Plane (Go)**: Manages users, organizations, projects, and repositories. Subscribes to NATS for chat lifecycle events (`agent.control.{run_id}.start/close/resume`) to create and terminate per-run Docker containers. Accessed internally via agent-service proxy for UI requests.
+- **Agent Service (Python)**: FastAPI service that handles ChatKit interactions, NATS messaging, and acts as the single entry point for all UI requests. Stores chat threads and items in its own PostgreSQL schema, proxies control-plane APIs (auth, projects, repositories), and streams worker events to the UI via SSE.
+- **Web UI (Angular)**: Provides the chat interface and workflow monitoring. All API requests are routed through the agent-service proxy; the UI uses a custom Angular SSE client for streaming events.
+- **Agent Worker (Python)**: Runs inside ephemeral Docker containers created by the control plane. Four variants exist: `specialist` (multi-phase LangGraph), `single-agent` (simplified LangGraph), `crewai` (CrewAI project runner), and `crewai-expert` (CrewAI with dependency patching and approvals).
+- **NATS JetStream with Durable Consumers**: Provides reliable messaging between services. Uses separate streams for control commands, state events, and chat/user events; user-scoped subject patterns route events per user/run.
+- **PostgreSQL**: Persistent storage for application data, LangGraph checkpoints, events, and chat containers.
+- **Docker Workspaces**: Isolated execution environments created by the control plane; the worker process runs inside them and clones the target repository into `/workspace`.
+- **LangGraph / CrewAI**: Orchestrates workflows within agent containers depending on the selected worker variant.
+- **LangSmith**: Distributed tracing for LLM operations (where configured).
 
 ## Current State & Roadmap
 
-The architecture and components described above are implemented and runnable. `make clean-start` demonstrates the full chat-to-container flow, and the worker now clones the selected repository into `/workspace` before the workflow starts. A custom CrewAI wrapper worker type discovers available agent projects and surfaces them in the chat session, so the user can pick which multi-agent project to run. The implementation is **demo-ready** rather than production-ready for personal projects.
+The architecture and components described above are implemented and runnable. `make clean-start` demonstrates the full chat-to-container flow, and the worker clones the selected repository into `/workspace` before the workflow starts. The UI lets the user pick one of four worker variants (`specialist`, `single-agent`, `crewai`, `crewai-expert`). CrewAI variants discover available agent projects and present them as cards, and `crewai-expert` adds dependency patching and approval workflows. The implementation is **demo-ready** rather than production-ready for personal projects.
 
 ### Development Mode
 
@@ -148,15 +150,19 @@ The target automatically starts the specified services locally in the background
 
 ## Key Design Patterns
 
-- **NATS-Based Container Management**: Control plane subscribes to NATS agent.control.{run_id}.start/close messages to manage agent containers instead of HTTP endpoints.
-- **User-Scoped Subject Routing**: NATS subjects use user-scoped patterns (agent.user.{uid}.chat.{rid}.*) for per-user message routing.
-- **Worker Separation**: API and worker processes communicate via NATS for scalability.
+- **NATS-Based Container Management**: Control plane subscribes to NATS `agent.control.{run_id}.start/close/resume` messages to create/terminate per-run Docker containers instead of HTTP endpoints.
+- **User-Scoped Subject Routing**: NATS subjects use user-scoped patterns for per-user/per-run routing:
+  - State events: `agent.user.{uid}.events.{rid}.state.{event_type}`
+  - Worker chat events: `agent.user.{uid}.chat.{rid}.worker.events`
+  - User chat events: `agent.user.{uid}.chat.{rid}.user.events`
+- **Separate Command, State, and Chat Streams**: Control commands, workflow state events, and interactive chat events travel on distinct JetStream streams (`AGENT_CONTROL`, `AGENT_EVENTS`, `AGENT_CHAT`).
+- **Worker Separation**: Agent-service (HTTP/NATS API layer) and agent-worker (execution layer) communicate only via NATS; workers run inside containers spawned by the control-plane.
 - **Checkpoint Persistence**: LangGraph state persisted in PostgreSQL for recovery.
-- **Event Streaming**: SSE for real-time UI updates with replay support.
-- **Workspace Isolation**: Docker containers with resource limits for safe execution.
-- **Human-in-the-Loop**: LangGraph interrupts for approval of sensitive operations.
+- **Event Streaming**: SSE for real-time UI updates; worker events are bridged from NATS to the SSE stream.
+- **Workspace Isolation**: Docker containers with resource limits for safe execution; the control-plane creates the container and the worker clones the repo into `/workspace`.
+- **Human-in-the-Loop**: LangGraph interrupts and CrewAI Expert approval nodes pause for user approval on sensitive operations.
 - **Idempotency**: Message ID tracking to prevent duplicate processing.
-- **Chat Lifecycle**: Complete lifecycle from chat start → container creation → agent execution → state updates → chat termination.
+- **Chat Lifecycle**: Complete lifecycle from chat start → container creation → agent execution → state/chat updates → chat termination.
 
 ## Diagram Source Files and Regeneration
 
@@ -187,6 +193,7 @@ npx @mermaid-js/mermaid-cli --version
 # Regenerate all diagrams
 npx @mermaid-js/mermaid-cli -i architecture-component-diagram.mmd -o svg/architecture-component-diagram.svg
 npx @mermaid-js/mermaid-cli -i architecture-simple-flow.mmd -o svg/architecture-simple-flow.svg
+npx @mermaid-js/mermaid-cli -i crewai-expert-flow.mmd -o svg/crewai-expert-flow.svg
 npx @mermaid-js/mermaid-cli -i sequence-chat-lifecycle.mmd -o svg/sequence-chat-lifecycle.svg
 npx @mermaid-js/mermaid-cli -i sequence-chatkit-chat.mmd -o svg/sequence-chatkit-chat.svg
 npx @mermaid-js/mermaid-cli -i sequence-workflow-trigger.mmd -o svg/sequence-workflow-trigger.svg

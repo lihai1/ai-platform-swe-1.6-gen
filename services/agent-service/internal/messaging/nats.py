@@ -7,6 +7,23 @@ from nats.aio.client import Client as NATSClient
 from nats.errors import Error as NATSError
 from datetime import datetime, timedelta
 import uuid
+from agentic_shared.nats_subjects import (
+    format_control_start,
+    format_control_close,
+    format_control_resume,
+    format_event_state,
+    format_event_state_wildcard,
+    format_chat_user_events,
+    format_chat_worker_events,
+    CONTROL_WILDCARD_SUBJECT,
+    CHAT_WILDCARD_SUBJECT,
+    EVENT_WILDCARD_SUBJECT,
+    CHAT_ERRORS_SUBJECT,
+    STREAM_AGENT_CHAT,
+    STREAM_AGENT_CONTROL,
+    STREAM_AGENT_EVENTS,
+    STREAM_AGENT_ERRORS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,26 +75,26 @@ class NATSMessaging:
         """Create JetStream streams if they don't exist"""
         stream_configs = [
             {
-                "name": "AGENT_CHAT",
-                "subjects": ["agent.user.*.chat.>"],
+                "name": STREAM_AGENT_CHAT,
+                "subjects": [CHAT_WILDCARD_SUBJECT],
                 "description": "Agent chat stream for user events",
                 "label": "Chat",
             },
             {
-                "name": "AGENT_CONTROL",
-                "subjects": ["agent.control.>"],
+                "name": STREAM_AGENT_CONTROL,
+                "subjects": [CONTROL_WILDCARD_SUBJECT],
                 "description": "Agent control stream",
                 "label": "Command",
             },
             {
                 "name": self.event_stream_name,
-                "subjects": ["agent.user.*.events.>"],
+                "subjects": [EVENT_WILDCARD_SUBJECT],
                 "description": "Agent event stream",
                 "label": "Event",
             },
             {
-                "name": "AGENT_ERRORS",
-                "subjects": ["agent.user.*.chat.errors"],
+                "name": STREAM_AGENT_ERRORS,
+                "subjects": [CHAT_ERRORS_SUBJECT],
                 "description": "Agent error stream",
                 "label": "Error",
             },
@@ -156,7 +173,7 @@ class NATSMessaging:
         message_id: Optional[str] = None,
     ) -> str:
         """Publish an event to the event stream"""
-        subject = f"agent.user.{user_id}.events.{run_id}.state.{event_type}"
+        subject = format_event_state(user_id, run_id, event_type)
         return await self._publish_message(
             subject=subject,
             label="event",
@@ -178,7 +195,7 @@ class NATSMessaging:
         
         # Create unique durable consumer name with service_id, user_id and run_id
         if user_id and run_id:
-            subject = f"agent.user.{user_id}.events.{run_id}.state.>"
+            subject = format_event_state_wildcard(user_id, run_id)
             consumer_name = f"{self.service_id}-events-{user_id}-{run_id}-consumer"
         elif user_id:
             subject = f"agent.user.{user_id}.events.>"
@@ -187,7 +204,7 @@ class NATSMessaging:
             subject = f"agent.user.*.events.{run_id}.state.>"
             consumer_name = f"{self.service_id}-events-{run_id}-consumer"
         else:
-            subject = "agent.user.*.events.>"
+            subject = EVENT_WILDCARD_SUBJECT
             consumer_name = f"{self.service_id}-events-consumer"
         
         try:
@@ -253,7 +270,7 @@ class NATSMessaging:
     ) -> str:
         """Publish a chat start message to trigger container creation"""
         # Use plain NATS for agent.control.{run_id}.start to match control plane subscription
-        subject = f"agent.control.{run_id}.start"
+        subject = format_control_start(run_id)
         return await self._publish_message(
             subject=subject,
             label="chat start",
@@ -313,7 +330,7 @@ class NATSMessaging:
         
         # Create unique durable consumer name with service_id, user_id and run_id
         if user_id and run_id:
-            subject = f"agent.user.{user_id}.chat.{run_id}.worker.events"
+            subject = format_chat_worker_events(user_id, run_id)
             consumer_name = f"{self.service_id}-chat-{user_id}-{run_id}-consumer"
         elif user_id:
             subject = f"agent.user.{user_id}.chat.*.worker.events"
@@ -329,7 +346,7 @@ class NATSMessaging:
             # Create subscription with JetStream, explicitly specifying the stream
             await self.js.subscribe(
                 subject=subject,
-                stream="AGENT_CHAT",
+                stream=STREAM_AGENT_CHAT,
                 cb=await self._create_event_handler(event_handler),
                 manual_ack=True,
             )
@@ -347,7 +364,7 @@ class NATSMessaging:
         message_id: Optional[str] = None,
     ) -> str:
         """Publish a chat event to the chat stream (user events like tool approvals)"""
-        subject = f"agent.user.{user_id}.chat.{run_id}.user.events"
+        subject = format_chat_user_events(user_id, run_id)
         return await self._publish_message(
             subject=subject,
             label="chat event",
@@ -364,7 +381,7 @@ class NATSMessaging:
         message_id: Optional[str] = None,
     ) -> str:
         """Publish a chat close command to the control stream"""
-        subject = f"agent.control.{run_id}.close"
+        subject = format_control_close(run_id)
         return await self._publish_message(
             subject=subject,
             label="chat close",
@@ -385,7 +402,7 @@ class NATSMessaging:
         message_id: Optional[str] = None,
     ) -> str:
         """Publish a chat resume command to the control stream"""
-        subject = f"agent.control.{run_id}.resume"
+        subject = format_control_resume(run_id)
         return await self._publish_message(
             subject=subject,
             label="chat resume",
@@ -408,7 +425,7 @@ class NATSMessaging:
         if not self.js:
             raise RuntimeError("NATS not connected")
 
-        subject = "agent.user.*.chat.errors"
+        subject = CHAT_ERRORS_SUBJECT
         consumer_name = f"{self.service_id}-errors-consumer"
 
         try:

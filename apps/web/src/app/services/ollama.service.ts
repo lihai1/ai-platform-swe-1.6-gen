@@ -14,7 +14,7 @@ export type LLMProviderType = 'ollama' | 'openai' | 'anthropic';
   providedIn: 'root'
 })
 export class LLMService {
-  private baseUrl = 'http://localhost:8000/api';
+  private baseUrl = '/api'; // Use relative URL to go through nginx proxy
 
   constructor(private http: HttpClient) {}
 

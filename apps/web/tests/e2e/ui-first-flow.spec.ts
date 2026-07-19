@@ -46,6 +46,21 @@ test.describe('UI First Flow — Projects → Chat → Agent Response', () => {
     const body = await res.json();
     // Control plane returns null when no projects exist, or an array when projects exist
     expect(body === null || Array.isArray(body)).toBeTruthy();
+
+    // Verify loading spinner is hidden after API call completes
+    const loadingState = page.locator('.loading-state');
+    await expect(loadingState).not.toBeVisible();
+
+    // Verify either project list or empty state is shown
+    const projectList = page.locator('.project-list');
+    const emptyState = page.locator('.empty-state');
+    const hasProjects = body !== null && Array.isArray(body) && body.length > 0;
+
+    if (hasProjects) {
+      await expect(projectList).toBeVisible();
+    } else {
+      await expect(emptyState).toBeVisible();
+    }
   });
 
   test('2. Create a new project via UI → confirmed by API', async ({ page, request }) => {
@@ -386,5 +401,105 @@ test.describe('UI First Flow — Projects → Chat → Agent Response', () => {
 
     // Expect workflow execution message (orchestration is now working)
     expect(assistantText).toContain('Workflow started');
+  });
+
+  test('9. Chat session reuse: create project → send message → return to projects → click project → see previous messages', async ({ page, request }) => {
+    const { controlPlane, agentService } = await servicesReady(request);
+    test.skip(!controlPlane || !agentService, 'Services not running');
+
+    const name = `e2e-session-reuse-${Date.now()}`;
+    const userMessage = 'Test message for session reuse';
+    const assistantMessagePrefix = 'Assistant response';
+
+    // Step A: create project
+    const createDone = page.waitForResponse(
+      res => res.url().includes('/api/v1/projects') && res.request().method() === 'POST'
+    );
+
+    await page.goto('/projects');
+    await page.waitForLoadState('networkidle');
+    await page.getByRole('button', { name: '+ New Project' }).click();
+    await page.getByLabel('Project Name').fill(name);
+    await page.getByLabel('Description').fill('Session reuse test');
+    await page.locator('.modal-footer').getByRole('button', { name: 'Create Project' }).click();
+
+    const createRes = await createDone;
+    expect(createRes.status()).toBe(200);
+    const newProject = await createRes.json();
+    expect(newProject.id).toBeTruthy();
+
+    // Step B: skip repository and navigate to chat
+    await page.locator('.option-card').filter({ hasText: 'Skip for Now' }).click();
+    await page.waitForURL(/\/chat/, { timeout: 8000 });
+    await page.waitForLoadState('networkidle');
+    await expect(page.getByRole('heading', { name: 'Agent Chat' })).toBeVisible();
+    expect(page.url()).toContain(`project_id=${newProject.id}`);
+
+    // Step C: send a message
+    const textarea = page.locator('textarea.message-input');
+    await expect(textarea).toBeVisible();
+    await textarea.fill(userMessage);
+
+    const chatDone = page.waitForResponse(
+      res => res.url().includes('/api/chatkit/') && res.request().method() === 'POST',
+      { timeout: 15000 }
+    );
+
+    await page.getByRole('button', { name: 'Send' }).click();
+
+    // User message appears
+    await expect(
+      page.locator('.message.user .message-content').filter({ hasText: userMessage })
+    ).toBeVisible({ timeout: 5000 });
+
+    const chatRes = await chatDone;
+    expect([200, 201, 502]).toContain(chatRes.status());
+
+    // Wait for assistant to respond
+    await expect(
+      page.locator('.message.assistant .message-content').first()
+    ).not.toBeEmpty({ timeout: 20000 });
+
+    const reply = await page.locator('.message.assistant .message-content').first().textContent();
+    expect(reply?.trim().length).toBeGreaterThan(0);
+
+    // Step D: navigate back to projects page
+    await page.goto('/projects');
+    await page.waitForLoadState('networkidle');
+    await expect(page.getByRole('heading', { name: 'Agentic Engineering Platform' })).toBeVisible();
+
+    // Step E: click the project to reuse the session
+    const projectCard = page.locator('.project-card').filter({ hasText: name });
+    await expect(projectCard).toBeVisible();
+    
+    // Intercept the thread lookup call
+    const threadLookup = page.waitForResponse(
+      res => res.url().includes('/api/chatkit/threads/by-project') && res.request().method() === 'GET',
+      { timeout: 5000 }
+    );
+
+    await projectCard.click();
+
+    // Wait for thread lookup to complete
+    const lookupRes = await threadLookup;
+    expect(lookupRes.status()).toBe(200);
+
+    // Navigate to chat page
+    await page.waitForURL(/\/chat/, { timeout: 8000 });
+    await page.waitForLoadState('networkidle');
+    await expect(page.getByRole('heading', { name: 'Agent Chat' })).toBeVisible();
+
+    // Step F: verify previous messages are loaded
+    await expect(
+      page.locator('.message.user .message-content').filter({ hasText: userMessage })
+    ).toBeVisible({ timeout: 5000 });
+
+    await expect(
+      page.locator('.message.assistant .message-content').first()
+    ).not.toBeEmpty({ timeout: 5000 });
+
+    const restoredReply = await page.locator('.message.assistant .message-content').first().textContent();
+    expect(restoredReply?.trim().length).toBeGreaterThan(0);
+    expect(restoredReply).toBe(reply); // Same message as before
   });
 });

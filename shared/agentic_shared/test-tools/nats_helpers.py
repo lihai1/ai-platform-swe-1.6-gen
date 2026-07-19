@@ -7,6 +7,18 @@ from typing import Optional, Dict, Any, AsyncGenerator
 from nats.aio.client import Client as NATSClient
 from nats.js.api import ConsumerConfig
 from contextlib import asynccontextmanager
+import sys
+from pathlib import Path
+
+# Add shared directory to path for imports
+shared_path = Path(__file__).parent.parent / "shared"
+sys.path.insert(0, str(shared_path))
+from nats_subjects import (
+    EVENT_WILDCARD_SUBJECT,
+    CHAT_WILDCARD_SUBJECT,
+    STREAM_AGENT_EVENTS,
+    STREAM_AGENT_CHAT,
+)
 
 
 class NATSTestClient:
@@ -28,8 +40,8 @@ class NATSTestClient:
         # Create AGENT_EVENTS stream if it doesn't exist
         try:
             await js.add_stream(
-                name="AGENT_EVENTS",
-                subjects=["agent.user.*.events.>"],
+                name=STREAM_AGENT_EVENTS,
+                subjects=[EVENT_WILDCARD_SUBJECT],
                 description="Agent state events stream"
             )
         except Exception as e:
@@ -40,8 +52,8 @@ class NATSTestClient:
         # Create AGENT_CHAT stream if it doesn't exist
         try:
             await js.add_stream(
-                name="AGENT_CHAT",
-                subjects=["agent.user.*.chat.>"],
+                name=STREAM_AGENT_CHAT,
+                subjects=[CHAT_WILDCARD_SUBJECT],
                 description="Agent chat events stream"
             )
         except Exception as e:

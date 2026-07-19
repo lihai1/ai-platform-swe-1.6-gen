@@ -20,8 +20,9 @@ func NewChatContainerHandler(containerService *service.ChatContainerService) *Ch
 type CreateContainerRequest struct {
 	RunID        string `json:"run_id"`
 	RepositoryID string `json:"repository_id"`
+	UserID       string `json:"user_id"`
 	MockMode     bool   `json:"mock_mode"`
-	AgentType    string `json:"agent_type"`   // "multi-agent" or "single-agent"
+	AgentType    string `json:"agent_type"`   // "multi-agent", "single-agent", "crewai", or "crewai-expert"
 	LLMProvider  string `json:"llm_provider"` // "fake", "ollama", "openai", "anthropic"
 	APIKey       string `json:"api_key"`      // API key for non-Ollama providers
 }
@@ -33,37 +34,22 @@ func (h *ChatContainerHandler) CreateContainer(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	var container interface{}
-	var err error
-
-	// TODO: Make agent type selection more robust with validation
-	// Currently defaults to multi-agent if not specified
-	if req.AgentType == "single-agent" {
-		repoConfig := orchestrator.RepositoryConfig{
-			RunID:        req.RunID,
-			RepositoryID: req.RepositoryID,
-			Credentials:  nil,
-		}
-		llmConfig := orchestrator.LLMConfig{
-			MockMode:    req.MockMode,
-			LLMProvider: req.LLMProvider,
-			APIKey:      req.APIKey,
-		}
-		container, err = h.containerService.CreateSingleAgentContainer(repoConfig, llmConfig)
-	} else {
-		// Default to multi-agent mode
-		repoConfig := orchestrator.RepositoryConfig{
-			RunID:        req.RunID,
-			RepositoryID: req.RepositoryID,
-			Credentials:  nil,
-		}
-		llmConfig := orchestrator.LLMConfig{
-			MockMode:    req.MockMode,
-			LLMProvider: req.LLMProvider,
-			APIKey:      req.APIKey,
-		}
-		container, err = h.containerService.CreateSpecialistAgentContainer(repoConfig, llmConfig)
+	repoConfig := orchestrator.RepositoryConfig{
+		RunID:        req.RunID,
+		RepositoryID: req.RepositoryID,
 	}
+	llmConfig := orchestrator.LLMConfig{
+		MockMode:    req.MockMode,
+		LLMProvider: req.LLMProvider,
+		APIKey:      req.APIKey,
+	}
+
+	var runParams *orchestrator.RunParameters
+	if req.AgentType == "crewai-expert" {
+		runParams = &orchestrator.RunParameters{UserID: req.UserID}
+	}
+
+	container, err := h.containerService.CreateContainerForAgentType(req.AgentType, repoConfig, llmConfig, runParams)
 
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

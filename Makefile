@@ -20,11 +20,12 @@ clean:
 	docker ps -q | xargs -r docker kill || true
 
 # Build and start all services
-start: build-containers
+start:
 	@echo "Starting services..."
-	docker-compose up -d
+	docker-compose up
 	@echo "Services started successfully"
-restart: compose-down start
+	
+restart: compose-down build-containers start
 # Build containers manually and start services
 compose-up: build-containers
 	@echo "Starting services..."
@@ -52,13 +53,13 @@ mock-llm-start: clean build-containers
 # Terminate deployment, clean volumes, and start fresh
 build-containers:
 	@echo "Building containers manually..."
-	docker build -t ai-platform-swe-16-gen-control-plane ./services/control-plane
-	docker build -t ai-platform-swe-16-gen-agent-service ./services/agent-service
-	docker build -t agentic-agent-worker-base-builder:latest . -f ./services/agent-worker/Dockerfile.base-builder
-	docker build -t agentic-specialist-agent-worker:latest . -f ./services/agent-worker/Dockerfile.specialist
-	docker build -t agentic-single-agent-worker:latest . -f ./services/agent-worker/Dockerfile.single-agent
-	docker build -t agentic-crewai-agent-worker:latest . -f ./services/agent-worker/Dockerfile.crewai
-	docker build -t ai-platform-swe-16-gen-web ./apps/web
+	docker build -t agentic-agents-platform-control-plane ./services/control-plane
+	docker build -t agentic-agents-platform-agent-service . -f ./services/agent-service/Dockerfile
+	docker build -t agentic-agents-platform-agent-worker-base-builder:latest . -f ./services/agent-worker/Dockerfile.base-builder
+	docker build -t agentic-agents-platform-agent-worker-specialist:latest . -f ./services/agent-worker/Dockerfile.specialist
+	docker build -t agentic-agents-platform-agent-worker-single-agent:latest . -f ./services/agent-worker/Dockerfile.single-agent
+	docker build -t agentic-agents-platform-agent-worker-crewai:latest . -f ./services/agent-worker/Dockerfile.crewai
+	docker build -t agentic-agents-platform-web ./apps/web
 	@echo "All containers built successfully"
 
 # Run UI e2e tests

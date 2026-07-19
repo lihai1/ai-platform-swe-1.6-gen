@@ -40,7 +40,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ai-platform-swe-16-gen-control-plane:latest
+    image: agentic-agents-platform-control-plane:latest
     container_name: agentic-backend
     depends_on:
       postgres:

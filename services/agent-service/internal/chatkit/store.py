@@ -12,12 +12,13 @@ class PostgreSQLStore:
 
     async def create_thread(self, metadata: dict) -> str:
         run_id = metadata.get("id") or metadata.get("run_id") or str(uuid.uuid4())
+        project_id = metadata.get("project_id")
         # Create AgentRun record
         async with self.session_factory() as session:
             run = AgentRun(
                 id=run_id,
                 user_id=metadata.get("user_subject", "user:local-dev"),
-                project_id=metadata.get("project_id") or "",
+                project_id=project_id if project_id and project_id.strip() else "",
                 repository_id=metadata.get("repository_id") or "",
                 task=metadata.get("task", ""),
                 status="CREATED",
@@ -42,9 +43,14 @@ class PostgreSQLStore:
         return None
 
     async def get_thread_by_project_id(self, project_id: str) -> Optional[dict]:
+        if not project_id or not project_id.strip():
+            return None
         async with self.session_factory() as session:
             result = await session.execute(
-                select(AgentRun).where(AgentRun.project_id == project_id)
+                select(AgentRun)
+                .where(AgentRun.project_id == project_id)
+                .order_by(AgentRun.created_at.desc())
+                .limit(1)
             )
             run = result.scalar_one_or_none()
             if run:

@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from internal.db import get_session
+from internal.db import AsyncSessionLocal, get_session
 from internal.models import AgentRun
 from internal.messaging.nats import NATSMessaging
 from internal.chatkit.context import context_from_request, RequestContext
@@ -10,7 +10,7 @@ from internal.chatkit.server import AegisChatKitServer
 from internal.chatkit.store import PostgreSQLStore
 from internal.chatkit.nats_bridge import NatsBridge
 from internal.config import settings
-from typing import Optional
+from typing import Any, Optional
 import uuid
 import json
 from datetime import datetime, timezone
@@ -153,17 +153,18 @@ async def chatkit_endpoint(request: Request):
             inference_options={},
         )
 
-        if is_new_thread:
-            metadata = _build_agent_metadata(context, ui_request)
-            logger.info(f"Initializing new thread {run_id} with message: {message}")
-            await server.nats.publish_agent_start(
-                run_id=run_id,
-                conversation_id=run_id,
-                user_subject=context.user_subject,
-                prompt=message,
-                metadata=metadata,
-            )
-            logger.info(f"Published agent start event for thread {run_id}")
+        # Build agent metadata and publish control start message
+        # Control-plane will handle container lifecycle (reuse existing or create new)
+        metadata = _build_agent_metadata(context, ui_request)
+        logger.info(f"Publishing agent start event for thread {run_id} (new={is_new_thread})")
+        await server.nats.publish_agent_start(
+            run_id=run_id,
+            conversation_id=run_id,
+            user_subject=context.user_subject,
+            prompt=message,
+            metadata=metadata,
+        )
+        logger.info(f"Published agent start event for thread {run_id}")
 
         return StreamingResponse(
             server.respond(
@@ -190,20 +191,13 @@ async def agent_start_endpoint(request: Request):
     try:
         ui_request = json.loads(body) if body else {}
 
-        run_id = f"run-{uuid.uuid4()}"
-        logger.info(f"Generated new run_id: {run_id}")
-
         server = await get_chatkit_server()
-        await server.store.create_thread({
-            "id": run_id,
-            "run_id": run_id,
-            "user_subject": base_context.user_subject,
-            "project_id": ui_request.get("project_id"),
-            "repository_id": ui_request.get("repository_id"),
-            "project_path": ui_request.get("project_path"),
-            "task": "",
-        })
-        logger.info(f"Created new run {run_id}")
+        run_id, is_new_thread = await _create_or_reuse_thread(
+            server,
+            ui_request,
+            base_context,
+            "new thread",
+        )
 
         context = _build_request_context(base_context, ui_request, run_id)
         metadata = _build_agent_metadata(context, ui_request)
@@ -216,9 +210,9 @@ async def agent_start_endpoint(request: Request):
             prompt="",
             metadata=metadata,
         )
-        logger.info(f"Published agent start event for run {run_id}")
+        logger.info(f"Published agent start event for run {run_id} (new={is_new_thread})")
 
-        return {"run_id": run_id, "status": "started"}
+        return {"run_id": run_id, "status": "started", "is_new_thread": is_new_thread}
 
     except Exception as e:
         logger.error(f"Error in agent start endpoint: {e}")
@@ -275,6 +269,47 @@ async def get_thread(
         raise HTTPException(status_code=500, detail=f"Failed to get thread: {str(e)}")
 
 
+@chatkit_router.get("/threads/by-project/{project_id}")
+async def get_thread_by_project(
+    project_id: str,
+    session: AsyncSession = Depends(get_session)
+):
+    """Get the latest thread for a project by project_id"""
+    try:
+        from internal.chatkit.store import PostgreSQLStore
+        from internal.db import AsyncSessionLocal
+        
+        if not project_id or not project_id.strip():
+            raise HTTPException(status_code=400, detail="project_id is required")
+        
+        store = PostgreSQLStore(AsyncSessionLocal)
+        
+        logger.info(f"Querying latest thread by project_id: {project_id}")
+        thread = await store.get_thread_by_project_id(project_id)
+        
+        if not thread:
+            logger.info(f"No thread found for project {project_id}")
+            return {
+                "thread": None,
+                "items": []
+            }
+        
+        run_id = thread.get("run_id")
+        logger.info(f"Found run_id {run_id} for project {project_id}")
+        
+        messages = await store.get_messages(run_id)
+        
+        return {
+            "thread": thread,
+            "items": messages
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get thread by project: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get thread by project: {str(e)}")
+
+
 @chatkit_router.post("/close/{run_id}")
 async def close_chat(
     run_id: str,
@@ -308,13 +343,28 @@ async def send_input(
         if not user_input:
             raise HTTPException(status_code=400, detail="input is required")
 
+        payload: dict[str, Any] = {"type": "user_input", "input": user_input}
+        approval_request_id = data.get("approval_request_id")
+        if approval_request_id:
+            payload["approval_request_id"] = approval_request_id
+
+        try:
+            user_subject = context_from_request(request).user_subject
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(AgentRun).where(AgentRun.id == run_id))
+            run = result.scalar_one_or_none()
+
+        if not run or run.user_id != user_subject:
+            raise HTTPException(status_code=404, detail="User or run not found")
+
         nats = await get_nats_client()
-        user_subject = request.state.context.user_subject if hasattr(request.state, "context") else ""
-        user_subject = user_subject.replace(":", "-") or "unknown"
         await nats.publish_chat_event(
             event_type="user_input",
             run_id=run_id,
-            payload={"type": "user_input", "input": user_input},
+            payload=payload,
             user_id=user_subject,
         )
         return {"status": "sent", "run_id": run_id}

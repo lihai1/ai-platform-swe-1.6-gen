@@ -11,6 +11,7 @@ type ContainerOrchestrator interface {
 	RemoveContainer(containerID string) error
 	GetContainerStatus(containerID string) (*ContainerStatus, error)
 	ExecInContainer(containerID string, command []string) error
+	ListContainers(filterArgs map[string]string) ([]map[string]interface{}, error)
 }
 
 // ContainerConfig holds configuration for creating a container

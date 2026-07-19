@@ -1,0 +1,44 @@
+flowchart TD
+    UI([Chat UI])
+
+    subgraph Worker["crewai-expert container worker"]
+        direction TB
+
+        A[Graph State<br/>Prepare CrewAI Project<br/>Resolve, inspect, approve, patch and sync]
+        B[Graph State<br/>Run CrewAI CLI]
+        C([Completed])
+        D([Failed])
+        E([Cancelled])
+
+        A --> B
+        B --> C
+        B --> D
+        B --> E
+    end
+
+    UI -- User / approval input events --> A
+    A -- State output events --> UI
+    B -- State output events --> UI
+
+    UI -- Terminal input events --> B
+    B -- Terminal output events --> UI
+
+    B --> CLI[[CrewAI CLI]]
+
+    C --> UI
+    D --> UI
+    E --> UI
+
+    classDef ui fill:#e1f5ff,stroke:#01579b,stroke-width:2px
+    classDef state fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px
+    classDef terminal fill:#e1f5ff,stroke:#01579b,stroke-width:2px
+    classDef fail fill:#fce4ec,stroke:#880e4f,stroke-width:2px
+    classDef external fill:#cfd8dc,stroke:#455a64,stroke-width:2px
+
+    class UI ui
+    class A,B state
+    class C terminal
+    class D,E fail
+    class CLI external
+
+    style Worker fill:#f3e5f5,stroke:#4a148c,stroke-width:2px

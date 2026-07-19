@@ -2,6 +2,7 @@
 import logging
 import json
 import uuid
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -183,7 +184,6 @@ async def trigger_agent_with_prompt(run_id: str, payload: dict, worker=None) -> 
         run_id: The run identifier
         payload: The payload containing user input and metadata. May include:
             - content/input: The user message text
-            - project: Optional project object with keys: name, path, full_path, main_file, description
         worker: Optional worker instance with stored graph
     """
     from internal.workflow.checkpointer import get_checkpointer
@@ -203,37 +203,21 @@ async def trigger_agent_with_prompt(run_id: str, payload: dict, worker=None) -> 
             )
             logger.info(f"[WORKER] Published progress_update for user input")
         
-        # Check if payload contains a project object for CrewAI
-        project = payload.get("project")
-        
-        if project:
-            logger.info(f"[WORKER] Received project object: {project.get('name', 'unknown')}")
-            
-            # Check if it's a CrewAI project
-            from internal.agents.crewai.src.agent_worker.bootstrap import (
-                is_crewai_project,
-                WORKSPACE_ROOT,
-            )
-            
-            project_path = project.get("full_path") or project.get("path", "")
-            full_path = _resolve_project_path(project_path)
-            
-            if full_path.exists() and is_crewai_project(full_path):
-                logger.info(f"[WORKER] Detected CrewAI project at {full_path}")
-                
-                # Use CrewAI ProcessRunner to run the project
-                await _run_crewai_project(run_id, full_path, payload.get("user_id", ""), nats)
-                return
-            else:
-                logger.info(f"[WORKER] Path {full_path} is not a CrewAI project, falling back to LangGraph")
-        
         # Get current state from checkpointer first (to determine agent type and update state)
         config = {"configurable": {"thread_id": run_id}}
         checkpointer = await get_checkpointer()
         current_state = await checkpointer.aget(config)
         
         if not current_state:
-            logger.error(f"[WORKER] No state found for run {run_id}")
+            logger.warning(f"[WORKER] No state found for run {run_id}, treating as new conversation")
+            # Treat as new conversation - reinitialize the workflow
+            await handle_run_start(
+                run_id,
+                payload,
+                create_run,
+                get_checkpointer,
+                worker,
+            )
             return
         
         # Update state with new prompt content
@@ -268,79 +252,5 @@ async def trigger_agent_with_prompt(run_id: str, payload: dict, worker=None) -> 
         logger.error(f"[WORKER] Failed to trigger agent with prompt: {e}")
         import traceback
         logger.error(traceback.format_exc())
-
-
-def _resolve_project_path(project_path: str) -> Path:
-    """Resolve a project path relative to workspace root.
-    
-    Args:
-        project_path: The project path (relative or absolute)
-        
-    Returns:
-        Resolved absolute Path
-    """
-    from internal.agents.crewai.src.agent_worker.bootstrap import WORKSPACE_ROOT
-    
-    full_path = Path(project_path)
-    if not full_path.is_absolute():
-        full_path = WORKSPACE_ROOT / project_path
-    return full_path
-
-
-async def _run_crewai_project(run_id: str, project_path: Path, user_id: str, nats) -> None:
-    """Run a CrewAI project using the ProcessRunner.
-    
-    Args:
-        run_id: The run identifier
-        project_path: The absolute path to the CrewAI project
-        user_id: The user identifier
-        nats: The NATS messaging client
-    """
-    from internal.agents.crewai.src.agent_worker.bootstrap import detect_command
-    from internal.agents.crewai.src.agent_worker.runner import ProcessRunner
-    from internal.agents.crewai.src.agent_worker.nats_client import CrewAINatsClient
-    
-    logger.info(f"[WORKER] Running CrewAI project at {project_path}")
-    
-    try:
-        # Detect the command to run the project
-        command = detect_command(project_path)
-        logger.info(f"[WORKER] Detected command: {command}")
-        
-        # Create a CrewAI NATS client for the ProcessRunner
-        crewai_nats = CrewAINatsClient(
-            nats_url=nats.nats_url,
-            uid=user_id,
-            run_id=run_id,
-        )
-        await crewai_nats.connect()
-        
-        # Create and run the ProcessRunner
-        runner = ProcessRunner(
-            nats=crewai_nats,
-            command=command,
-            cwd=project_path,
-        )
-        
-        # Subscribe to user events for this run
-        await crewai_nats.subscribe_user_events(runner.handle_user_input)
-        
-        # Run the project
-        await runner.run()
-        
-        logger.info(f"[WORKER] CrewAI project execution completed for run {run_id}")
-        
-    except Exception as e:
-        logger.error(f"[WORKER] Failed to run CrewAI project: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        
-        # Publish error to UI
-        await nats.publish_chat_event(
-            event_type="final_answer",
-            run_id=run_id,
-            user_id=user_id,
-            payload={"content": f"Failed to run CrewAI project: {e}", "status": "failed", "error": True}
-        )
 
 

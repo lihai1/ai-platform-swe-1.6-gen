@@ -1,3 +1,4 @@
+import json
 from typing import Any
 from chatkit.types import ProgressUpdateEvent
 
@@ -155,6 +156,28 @@ def progress_from_event(event: dict[str, Any]) -> ProgressUpdateEvent:
                 f"Approval required: {payload.get('action', 'unknown')} "
                 f"on {payload.get('resource', 'unknown')}"
             ),
+        )
+
+    if event_type in {"waiting_input", "agent.waiting_input"}:
+        prompt = payload.get("prompt") or ""
+        if isinstance(prompt, str):
+            try:
+                parsed = json.loads(prompt)
+                if isinstance(parsed, dict) and parsed.get("message"):
+                    text = parsed["message"]
+                else:
+                    text = prompt
+            except Exception:
+                text = prompt
+        else:
+            text = str(prompt)
+
+        if not text:
+            text = payload.get("message") or "Waiting for user input"
+
+        return ProgressUpdateEvent(
+            icon="help-circle",
+            text=text,
         )
 
     # Handle workflow state events

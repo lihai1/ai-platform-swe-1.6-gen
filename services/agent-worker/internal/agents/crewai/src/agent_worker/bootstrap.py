@@ -1,7 +1,6 @@
 """Workspace resolution, command detection, and runnable folder bootstrap."""
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from typing import Optional, List, Dict
@@ -57,27 +56,16 @@ def ensure_inside_workspace(path: Path) -> Path:
 
 
 def is_runnable_folder(path: Path) -> bool:
-    """Return True if a folder contains Python project dependencies or entrypoint."""
+    """Return True if a folder contains an identifiable entrypoint."""
     if not path.is_dir():
         return False
-    # Check for Python project dependency files
     if (path / "pyproject.toml").exists():
         return True
     if (path / "requirements.txt").exists():
         return True
-    if (path / "setup.py").exists():
-        return True
-    if (path / "setup.cfg").exists():
-        return True
-    # Check for common entrypoint files
     if (path / "main.py").exists():
         return True
-    if (path / "app.py").exists():
-        return True
     if (path / "src" / "main.py").exists():
-        return True
-    # Check for any Python files in the folder
-    if any(path.glob("*.py")):
         return True
     return False
 
@@ -239,7 +227,7 @@ def resolve_runnable_folder(
     )
 
 
-def _read_pyproject_entrypoint(folder: Path) -> Optional[str]:
+def read_pyproject_entrypoint(folder: Path) -> Optional[str]:
     """Check pyproject.toml for a [project.scripts] or [project] entry."""
     pyproject = folder / "pyproject.toml"
     if not pyproject.exists():
@@ -264,24 +252,25 @@ def _read_pyproject_entrypoint(folder: Path) -> Optional[str]:
 
 def detect_command(folder: Path) -> str:
     """Detect the appropriate command to run a project."""
+    folder_str = str(folder)
     pyproject = folder / "pyproject.toml"
     if pyproject.exists():
-        entry_script = _read_pyproject_entrypoint(folder)
+        entry_script = read_pyproject_entrypoint(folder)
         if entry_script:
-            return f"bash -lc 'pip install --break-system-packages -e . && {entry_script}'"
+            return f"bash -lc 'cd {folder_str} && pip install --break-system-packages -e . && {entry_script}'"
         # Default crewai pyproject pattern
-        return "bash -lc 'pip install --break-system-packages -e . && crewai run'"
+        return f"bash -lc 'cd {folder_str} && pip install --break-system-packages -e . && crewai run'"
 
     requirements = folder / "requirements.txt"
     main = folder / "main.py"
     src_main = folder / "src" / "main.py"
 
     if requirements.exists() and main.exists():
-        return "bash -lc 'pip install --break-system-packages -r requirements.txt && python main.py'"
+        return f"bash -lc 'cd {folder_str} && pip install --break-system-packages -r requirements.txt && python main.py'"
     if main.exists():
-        return "python main.py"
+        return f"bash -lc 'cd {folder_str} && python main.py'"
     if src_main.exists():
-        return "python src/main.py"
+        return f"bash -lc 'cd {folder_str} && python src/main.py'"
 
     raise BootstrapError(
         "no_runnable_entrypoint",

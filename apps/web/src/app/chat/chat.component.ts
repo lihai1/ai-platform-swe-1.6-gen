@@ -14,6 +14,10 @@ interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   projects?: any[];
+  approval?: {
+    approvalRequestId?: string;
+    options: string[];
+  };
 }
 
 interface Project {
@@ -31,12 +35,6 @@ interface Project {
     <app-chat-config *ngIf="showConfig" (configComplete)="onConfigComplete($event)"></app-chat-config>
     
     <div class="chat-container" *ngIf="!showConfig">
-      @if (loadingThread) {
-        <div class="loading-overlay">
-          <div class="loading-spinner"></div>
-          <p>Loading conversation...</p>
-        </div>
-      }
       <div class="chat-header">
         <h1>Agent Chat</h1>
         <div class="chat-controls">
@@ -80,6 +78,16 @@ interface Project {
                   </div>
                 </div>
                 <span *ngIf="!isJsonArray(message.content)">{{ message.content }}</span>
+                <div *ngIf="message.approval?.options?.length" class="chat-approval-options">
+                  <button
+                    *ngFor="let option of message.approval?.options"
+                    class="btn btn-option"
+                    (click)="handleChatApprovalSelection(message, option)"
+                    [disabled]="isApprovalSubmitted(message.approval?.approvalRequestId)"
+                  >
+                    {{ option }}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -120,8 +128,9 @@ interface Project {
       <app-approval-dialog
         [visible]="showApprovalDialog"
         [approval]="pendingApproval"
-        (approve)="handleApproval($event, true)"
-        (reject)="handleApproval($event, false)"
+        (approve)="handleDialogDecision($event, true)"
+        (reject)="handleDialogDecision($event, false)"
+        (selectedOption)="handleDialogSelection($event)"
         (close)="showApprovalDialog = false"
       ></app-approval-dialog>
     </div>
@@ -264,6 +273,19 @@ interface Project {
     .message-content {
       white-space: pre-wrap;
       word-wrap: break-word;
+    }
+
+    .chat-approval-options {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      margin-top: 0.75rem;
+    }
+
+    .chat-approval-options .btn-option {
+      background: #667eea;
+      color: white;
+      text-align: left;
     }
     
     .project-list {
@@ -432,8 +454,9 @@ export class ChatComponent implements OnInit, OnDestroy {
   
   showApprovalDialog = false;
   pendingApproval: any = null;
+  private submittedApprovalRequestIds = new Set<string>();
+  private runProgressMessageIndex: number | null = null;
   
-  loadingThread = false;
   messages: ChatMessage[] = [];
   newMessage = '';
   isSending = false;
@@ -450,6 +473,7 @@ export class ChatComponent implements OnInit, OnDestroy {
     this.route.queryParams.subscribe(params => {
       this.projectId = params['project_id'] || null;
       this.repositoryId = params['repository_id'] || null;
+      this.runId = params['thread_id'] || params['run_id'] || null;
     });
   }
 
@@ -499,7 +523,7 @@ export class ChatComponent implements OnInit, OnDestroy {
     return true;
   }
   
-  onConfigComplete(config: any): void {
+  async onConfigComplete(config: any): Promise<void> {
     console.log('Config completed:', config);
     this.agentType = config.agentType;
     this.llmProvider = config.llmProvider;
@@ -510,7 +534,7 @@ export class ChatComponent implements OnInit, OnDestroy {
     
     console.log('After config complete - agentType:', this.agentType, 'llmProvider:', this.llmProvider, 'modelName:', this.modelName, 'mockMode:', this.mockMode);
     
-    this.loadThread();
+    await this.initializeChatIfNeeded();
   }
   
   resetConfig(): void {
@@ -539,16 +563,33 @@ export class ChatComponent implements OnInit, OnDestroy {
     const message = this.newMessage.trim();
     if (!message || this.isSending) return;
 
+    this.logMessageConfig();
+    this.prepareMessageSend();
+    this.addUserMessage(message);
+
+    try {
+      await this.sendChatkitMessage(message, true);
+    } catch (error) {
+      this.handleMessageSendError(error);
+    }
+  }
+
+  private logMessageConfig(): void {
     console.log('Sending message with config:', {
       agentType: this.agentType,
       llmProvider: this.llmProvider,
       mockMode: this.mockMode,
       apiKey: this.apiKey ? '***' : 'none'
     });
+  }
 
+  private prepareMessageSend(): void {
     this.newMessage = '';
     this.isSending = true;
+    this.closeActivityStream();
+  }
 
+  private closeActivityStream(): void {
     // The chat response and activity SSE share the same event stream; close any
     // active activity stream while the chat response is consuming events. It will
     // be restarted once the assistant message completes.
@@ -556,21 +597,20 @@ export class ChatComponent implements OnInit, OnDestroy {
       this.eventSource.close();
       this.eventSource = null;
     }
+  }
 
-    // Add user message immediately
+  private addUserMessage(message: string): void {
     this.messages.push({ role: 'user', content: message });
+  }
 
-    try {
-      await this.sendChatkitMessage(message, true);
-    } catch (error) {
-      console.error('Failed to send message:', error);
-      this.messages.push({
-        role: 'assistant',
-        content: 'Sorry, something went wrong. Please try again.'
-      });
-      this.isSending = false;
-      this.cdr.detectChanges();
-    }
+  private handleMessageSendError(error: any): void {
+    console.error('Failed to send message:', error);
+    this.messages.push({
+      role: 'assistant',
+      content: 'Sorry, something went wrong. Please try again.'
+    });
+    this.isSending = false;
+    this.cdr.detectChanges();
   }
 
   private async sendChatkitMessage(message: string, updateUi: boolean): Promise<void> {
@@ -637,9 +677,7 @@ export class ChatComponent implements OnInit, OnDestroy {
     let assistantMessage = '';
     let workflowTriggered = false;
 
-    if (updateUi) {
-      this.messages.push({ role: 'assistant', content: '' });
-    }
+    this.initializeAssistantMessage(updateUi);
 
     while (true) {
       const { done, value } = await reader.read();
@@ -648,18 +686,52 @@ export class ChatComponent implements OnInit, OnDestroy {
       const chunk = decoder.decode(value);
       const lines = chunk.split('\n');
 
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const result = this.processSSELine(line, assistantMessage, updateUi);
-          assistantMessage = result.assistantMessage;
-          if (result.workflowTriggered) {
-            workflowTriggered = true;
-          }
+      const result = this.processSSELines(lines, assistantMessage, updateUi);
+      assistantMessage = result.assistantMessage;
+      if (result.workflowTriggered) {
+        workflowTriggered = true;
+      }
+    }
+
+    if (updateUi && !assistantMessage) {
+      this.removeEmptyAssistantPlaceholder();
+    }
+
+    return { workflowTriggered };
+  }
+
+  private initializeAssistantMessage(updateUi: boolean): void {
+    if (updateUi) {
+      this.messages.push({ role: 'assistant', content: '' });
+    }
+  }
+
+  private removeEmptyAssistantPlaceholder(): void {
+    const lastMessage = this.messages[this.messages.length - 1];
+    if (lastMessage?.role === 'assistant' && !lastMessage.content) {
+      this.messages.pop();
+      this.cdr.detectChanges();
+    }
+  }
+
+  private processSSELines(
+    lines: string[],
+    assistantMessage: string,
+    updateUi: boolean
+  ): { assistantMessage: string; workflowTriggered: boolean } {
+    let workflowTriggered = false;
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const result = this.processSSELine(line, assistantMessage, updateUi);
+        assistantMessage = result.assistantMessage;
+        if (result.workflowTriggered) {
+          workflowTriggered = true;
         }
       }
     }
 
-    return { workflowTriggered };
+    return { assistantMessage, workflowTriggered };
   }
 
   private processSSELine(
@@ -676,7 +748,7 @@ export class ChatComponent implements OnInit, OnDestroy {
         workflowTriggered = true;
       }
 
-      if (data.type === 'progress_update' && updateUi) {
+      if ((data.type === 'progress_update' || (data.icon && data.text)) && updateUi) {
         this.handleProgressUpdate(data);
       } else if (data.type === 'thread.item.done' && data.item) {
         const result = this.handleThreadItemDone(data, assistantMessage, updateUi);
@@ -734,15 +806,19 @@ export class ChatComponent implements OnInit, OnDestroy {
       const parsed = JSON.parse(text);
       if (Array.isArray(parsed)) {
         projects = parsed;
+        console.log('Extracted projects from JSON text:', projects.length, 'projects');
       }
     } catch (e) {
+      console.log('Failed to parse text as JSON, checking item.projects field');
       // Not JSON, use regular text
     }
 
     if (projects.length === 0) {
       projects = data.item.projects || [];
+      console.log('Extracted projects from item.projects:', projects.length, 'projects');
     }
 
+    console.log('Final projects array:', projects);
     return projects;
   }
 
@@ -768,6 +844,7 @@ export class ChatComponent implements OnInit, OnDestroy {
     projects: any[] | undefined,
     complete: boolean
   ): void {
+    console.log('updateAssistantMessage called with:', { content, projects, complete });
     this.ngZone.run(() => {
       const lastMessage = this.messages[this.messages.length - 1];
       if (lastMessage?.role === 'assistant') {
@@ -776,6 +853,7 @@ export class ChatComponent implements OnInit, OnDestroy {
           content: content,
           projects: projects
         };
+        console.log('Updated message:', this.messages[this.messages.length - 1]);
         if (complete) {
           this.isSending = false;
         }
@@ -808,32 +886,238 @@ export class ChatComponent implements OnInit, OnDestroy {
       return;
     }
     
-    this.loadingThread = true;
     console.log('Loading thread for project:', this.projectId);
     
     try {
       const { token, userId } = this.getUserInfo();
       const savedRunId = this.getSavedRunId();
       
-      if (savedRunId) {
-        const loaded = await this.loadThreadByRunId(savedRunId, token, userId);
-        if (loaded) {
-          return;
-        }
-        this.clearProjectRunId();
+      if (savedRunId && await this.tryLoadThreadByRunId(savedRunId, token, userId)) {
+        return;
+      }
+      
+      if (await this.tryLoadThreadByProjectId(this.projectId, token, userId)) {
+        return;
       }
       
       this.initializeEmptyThread();
     } catch (error) {
       console.error('Failed to load thread:', error);
       this.messages = [];
+    }
+  }
+
+  private async tryLoadThreadByRunId(
+    savedRunId: string,
+    token: string | null,
+    userId: string
+  ): Promise<boolean> {
+    const loaded = await this.loadThreadByRunId(savedRunId, token, userId);
+    if (loaded) {
+      return true;
+    }
+    this.clearProjectRunId();
+    return false;
+  }
+
+  private async tryLoadThreadByProjectId(
+    projectId: string,
+    token: string | null,
+    userId: string
+  ): Promise<boolean> {
+    return await this.loadThreadByProjectId(projectId, token, userId);
+  }
+
+  private async initializeChatIfNeeded(): Promise<void> {
+    // If we already have a runId from URL or localStorage, just load the thread
+    if (this.runId) {
+      this.loadThread();
+      return;
+    }
+    
+    // Otherwise, initialize a new chat thread
+    try {
+      const { token, userId } = this.getUserInfo();
+      const urlParams = this.getUrlParams();
+      
+      const newRunId = await this.initializeChatThread(token, userId, urlParams);
+      
+      if (newRunId) {
+        this.runId = newRunId;
+        this.handleRunStarted(newRunId);
+      }
+    } catch (error) {
+      console.error('Failed to initialize chat:', error);
+    }
+  }
+
+  private getUrlParams(): { projectId: string | null; repositoryId: string | null; projectPath: string | null } {
+    const urlParams = new URLSearchParams(window.location.search);
+    return {
+      projectId: urlParams.get('project_id'),
+      repositoryId: urlParams.get('repository_id'),
+      projectPath: urlParams.get('project_path')
+    };
+  }
+
+  private async initializeChatThread(
+    token: string | null,
+    userId: string,
+    urlParams: { projectId: string | null; repositoryId: string | null; projectPath: string | null }
+  ): Promise<string | null> {
+    const response = await this.sendChatInitializationRequest(token, userId, urlParams);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to initialize chat: ${response.status} ${errorText}`);
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const data = await response.json();
+      const runId = data.run_id || null;
+      if (runId && urlParams.projectId) {
+        this.updateProjectWithRunId(urlParams.projectId, runId);
+      }
+      return runId;
+    }
+
+    return await this.processInitializationStream(response, urlParams.projectId);
+  }
+
+  private buildInitializationRequestPayload(
+    urlParams: { projectId: string | null; repositoryId: string | null; projectPath: string | null }
+  ): object {
+    return {
+      project_id: urlParams.projectId,
+      repository_id: urlParams.repositoryId,
+      project_path: urlParams.projectPath,
+      mock_mode: this.mockMode,
+      llm_provider: this.llmProvider,
+      model_name: this.modelName,
+      agent_type: this.agentType,
+      api_key: this.apiKey
+    };
+  }
+
+  private async sendChatInitializationRequest(
+    token: string | null,
+    userId: string,
+    urlParams: { projectId: string | null; repositoryId: string | null; projectPath: string | null }
+  ): Promise<Response> {
+    return await fetch('/api/chatkit/start', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'X-User-Subject': userId
+      },
+      body: JSON.stringify(this.buildInitializationRequestPayload(urlParams))
+    });
+  }
+
+  private async processInitializationStream(
+    response: Response,
+    projectId: string | null
+  ): Promise<string | null> {
+    const body = response.body;
+    if (!body) {
+      return null;
+    }
+
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let assistantMessage = '';
+    let runId: string | null = null;
+
+    // Initialize assistant message for UI updates
+    this.initializeAssistantMessage(true);
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n');
+
+        // Process SSE lines using the same logic as sendChatkitMessage
+        const result = this.processSSELines(lines, assistantMessage, true);
+        assistantMessage = result.assistantMessage;
+
+        // Extract run_id from the stream
+        if (!runId) {
+          runId = this.extractRunIdFromLines(lines);
+          if (runId) {
+            this.updateProjectWithRunId(projectId, runId);
+          }
+        }
+      }
     } finally {
-      console.log('loadThread completed, setting loadingThread = false');
-      this.loadingThread = false;
+      reader.releaseLock();
+    }
+
+    // Clean up an empty placeholder if the init stream carried only metadata
+    if (!assistantMessage) {
+      this.removeEmptyAssistantPlaceholder();
+    }
+
+    // Mark sending as complete
+    this.isSending = false;
+    this.cdr.detectChanges();
+
+    return runId;
+  }
+
+  private extractRunIdFromLines(lines: string[]): string | null {
+    for (const line of lines) {
+      const trimmedLine = line.trim();
+      if (trimmedLine.startsWith('data: ')) {
+        const runId = this.parseSSELineForRunId(trimmedLine);
+        if (runId) {
+          return runId;
+        }
+      }
+    }
+    return null;
+  }
+
+  private parseSSELineForRunId(line: string): string | null {
+    try {
+      const data = JSON.parse(line.slice(6));
+      return data.item?.thread_id || data.item?.run_id || data.thread_id || data.run_id || null;
+    } catch (e) {
+      console.debug('Failed to parse SSE line:', line);
+      return null;
+    }
+  }
+
+  private updateProjectWithRunId(projectId: string | null, runId: string): void {
+    if (!projectId) {
+      return;
+    }
+
+    const projectStr = localStorage.getItem(`project_${projectId}`);
+    if (projectStr) {
+      try {
+        const project = JSON.parse(projectStr);
+        project.thread_id = runId;
+        localStorage.setItem(`project_${projectId}`, JSON.stringify(project));
+        console.log(`Updated project ${projectId} with run_id ${runId}`);
+      } catch (e) {
+        console.error('Failed to update project object in localStorage:', e);
+      }
     }
   }
 
   private getSavedRunId(): string | null {
+    // Prefer thread_id from URL query params
+    if (this.runId) {
+      console.log('Using run_id from query params:', this.runId);
+      return this.runId;
+    }
+    
+    // Fall back to localStorage project object
     const projectStr = localStorage.getItem(`project_${this.projectId}`);
     if (projectStr) {
       try {
@@ -874,6 +1158,34 @@ export class ChatComponent implements OnInit, OnDestroy {
     return false;
   }
 
+  private async loadThreadByProjectId(
+    projectId: string,
+    token: string | null,
+    userId: string
+  ): Promise<boolean> {
+    try {
+      const response = await this.http.get<any>(`/api/chatkit/threads/by-project/${projectId}`, {
+        headers: { 
+          Authorization: `Bearer ${token}`,
+          'X-User-Subject': userId
+        }
+      }).toPromise();
+
+      if (response && response.thread && response.thread.run_id) {
+        this.runId = response.thread.run_id;
+        this.messages = response.items || [];
+        console.log('Successfully loaded thread by project_id');
+        if (this.runId) {
+          this.handleRunStarted(this.runId);
+        }
+        return true;
+      }
+    } catch (error) {
+      console.log('No thread found for project, will create new one');
+    }
+    return false;
+  }
+
   private clearProjectRunId(): void {
     const projectStr = localStorage.getItem(`project_${this.projectId}`);
     if (projectStr) {
@@ -894,6 +1206,8 @@ export class ChatComponent implements OnInit, OnDestroy {
   }
   
   handleRunStarted(runId: string): void {
+    this.submittedApprovalRequestIds.clear();
+    this.runProgressMessageIndex = null;
     this.currentRunId = runId;
     this.currentRun = {
       runId: runId,
@@ -904,11 +1218,68 @@ export class ChatComponent implements OnInit, OnDestroy {
   }
   
   handleApprovalRequired(approval: any): void {
-    this.pendingApproval = approval;
-    this.showApprovalDialog = true;
+    const normalizedApproval = this.normalizeWaitingInput(approval);
+    const approvalRequestId = normalizedApproval.approval_request_id;
+    if (approvalRequestId && this.submittedApprovalRequestIds.has(approvalRequestId)) {
+      return;
+    }
+
+    const isNewApproval = approvalRequestId !== this.pendingApproval?.approval_request_id;
+    this.pendingApproval = normalizedApproval;
+    if (isNewApproval) {
+      const description = normalizedApproval.description || normalizedApproval.message || 'Approval required.';
+      const options = Array.isArray(normalizedApproval.options) ? normalizedApproval.options : [];
+      this.messages.push({
+        role: 'assistant',
+        content: description,
+        approval: options.length > 0 ? { approvalRequestId, options } : undefined,
+      });
+    }
+    this.showApprovalDialog = !approvalRequestId && !normalizedApproval.options?.length;
+    this.cdr.detectChanges();
   }
-  
-  handleApproval(approvalId: string, approved: boolean): void {
+
+  private normalizeWaitingInput(eventData: any): any {
+    // crewai-expert publishes waiting_input with a stringified prompt payload
+    const prompt = eventData?.prompt;
+    if (typeof prompt === 'string') {
+      try {
+        const parsed = JSON.parse(prompt);
+        return {
+          ...eventData,
+          approval_request_id: parsed.approval_request_id || eventData.approval_request_id,
+          approval_type: parsed.approval_type || eventData.approval_type,
+          message: prompt,
+          options: parsed.options,
+          affected_files_count: parsed.affected_files_count,
+          summary: parsed.summary,
+        };
+      } catch {
+        // prompt is not JSON; keep as-is
+      }
+    }
+    return eventData;
+  }
+
+  handleDialogSelection(option: string): void {
+    this.submitUserInput(option);
+  }
+
+  handleChatApprovalSelection(message: ChatMessage, option: string): void {
+    this.submitUserInput(option, message.approval?.approvalRequestId);
+  }
+
+  isApprovalSubmitted(approvalRequestId: string | undefined): boolean {
+    return !!approvalRequestId && this.submittedApprovalRequestIds.has(approvalRequestId);
+  }
+
+  handleDialogDecision(approvalId: string, approved: boolean): void {
+    const isWaitingInput = this.pendingApproval?.approval_request_id || this.pendingApproval?.options;
+    if (isWaitingInput) {
+      this.submitUserInput(approved ? 'approved' : 'rejected');
+      return;
+    }
+
     const endpoint = approved ? 'approve' : 'reject';
     this.http.post(`/api/agent/runs/${this.currentRunId}/approvals/${approvalId}/${endpoint}`, {})
       .subscribe({
@@ -920,6 +1291,44 @@ export class ChatComponent implements OnInit, OnDestroy {
           console.error('Failed to submit approval:', err);
         }
       });
+  }
+
+  private async submitUserInput(value: string, approvalRequestId = this.pendingApproval?.approval_request_id): Promise<void> {
+    if (!this.currentRunId) {
+      console.error('No current run id; cannot submit user input');
+      return;
+    }
+
+    const { token, userId } = this.getUserInfo();
+    try {
+      const body: any = { input: value };
+      if (approvalRequestId) {
+        body.approval_request_id = approvalRequestId;
+      }
+      const response = await fetch(`/api/chatkit/input/${this.currentRunId}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'X-User-Subject': userId
+        },
+        body: JSON.stringify(body)
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to send input: ${response.status}`);
+      }
+
+      if (approvalRequestId) {
+        this.submittedApprovalRequestIds.add(approvalRequestId);
+      }
+      this.messages.push({ role: 'user', content: value });
+      this.showApprovalDialog = false;
+      this.pendingApproval = null;
+      this.cdr.detectChanges();
+    } catch (err) {
+      console.error('Failed to submit user input:', err);
+    }
   }
   
   handleArtifactCreated(artifact: any): void {
@@ -949,35 +1358,99 @@ export class ChatComponent implements OnInit, OnDestroy {
   }
   
   private handleEvent(event: any): void {
+    const eventData = event.payload ?? event.event_data ?? event;
     switch (event.event_type) {
+      case 'output':
+        this.updateRunProgressMessage(this.outputMessage(eventData));
+        break;
+      case 'progress_update':
+        this.updateRunProgressMessage(eventData.message || eventData.content);
+        break;
       case 'run_completed':
-      case 'run_failed':
-      case 'run_cancelled':
       case 'completed':
-      case 'failed':
-      case 'cancelled':
-      case 'budget_exceeded':
+        if (this.currentRun) {
+          this.currentRun.status = 'completed';
+        }
+        this.cdr.detectChanges();
+        break;
       case 'final_answer':
         if (this.currentRun) {
-          if (event.event_type === 'final_answer' || event.event_type === 'completed') {
-            this.currentRun.status = 'completed';
-          } else if (event.event_type === 'budget_exceeded') {
-            this.currentRun.status = 'budget_exceeded';
-          } else {
-            this.currentRun.status = event.event_type.replace('run_', '');
-          }
+          this.currentRun.status = 'completed';
         }
-        if (this.eventSource) {
-          this.eventSource.close();
+        this.completeRunProgressMessage(eventData.content || eventData.message);
+        this.closeRunEventStream();
+        break;
+      case 'run_failed':
+      case 'failed':
+      case 'run_cancelled':
+      case 'cancelled':
+      case 'budget_exceeded':
+        if (this.currentRun) {
+          this.currentRun.status = event.event_type === 'budget_exceeded'
+            ? 'budget_exceeded'
+            : event.event_type.replace('run_', '');
         }
+        this.completeRunProgressMessage(eventData.content || eventData.error || eventData.error_message || eventData.message);
+        this.closeRunEventStream();
+        break;
+      case 'waiting_input':
+        this.handleApprovalRequired(eventData);
         break;
       case 'approval_required':
-        this.handleApprovalRequired(event.event_data);
+        this.handleApprovalRequired(eventData);
         break;
       case 'artifact_created':
-        this.handleArtifactCreated(event.event_data);
+        this.handleArtifactCreated(eventData);
         break;
     }
+  }
+
+  private outputMessage(eventData: any): string {
+    const data = eventData.data || eventData.content || eventData.message;
+    if (typeof data !== 'string') {
+      return '';
+    }
+    if (data.startsWith('uv sync exit code: 0')) {
+      return 'Dependencies synchronized successfully.';
+    }
+    return data;
+  }
+
+  private updateRunProgressMessage(content: unknown): void {
+    if (typeof content !== 'string' || !content.trim()) {
+      return;
+    }
+    this.ngZone.run(() => {
+      if (this.runProgressMessageIndex === null) {
+        this.runProgressMessageIndex = this.messages.length;
+        this.messages.push({ role: 'assistant', content });
+      } else {
+        this.messages[this.runProgressMessageIndex] = { role: 'assistant', content };
+      }
+      this.cdr.detectChanges();
+    });
+  }
+
+  private completeRunProgressMessage(content: unknown): void {
+    if (typeof content === 'string' && content.trim()) {
+      this.ngZone.run(() => {
+        if (this.runProgressMessageIndex === null) {
+          this.messages.push({ role: 'assistant', content });
+        } else {
+          this.messages[this.runProgressMessageIndex] = { role: 'assistant', content };
+        }
+        this.runProgressMessageIndex = null;
+        this.cdr.detectChanges();
+      });
+    }
+  }
+
+  private closeRunEventStream(): void {
+    if (this.eventSource) {
+      this.eventSource.close();
+      this.eventSource = null;
+    }
+    this.cdr.detectChanges();
   }
   
   selectProject(project: Project): void {

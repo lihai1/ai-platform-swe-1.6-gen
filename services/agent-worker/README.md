@@ -1,6 +1,6 @@
 # Agent Worker
 
-Multi-agent worker process for isolated agent workflow execution. Runs in isolated containers with git access, communicating only via NATS. Supports both LangGraph workflows (single-agent and specialist-agent) and CrewAI project execution.
+Multi-agent worker process for isolated agent workflow execution. Runs in isolated containers with git access, communicating only via NATS. Supports LangGraph workflows (`specialist`, `single-agent`) and CrewAI execution modes (`crewai`, `crewai-expert`).
 
 ## Purpose
 
@@ -20,15 +20,16 @@ The agent-worker contains the **complete LangGraph workflow implementation** wit
 
 ### Workflow Modes
 
-The worker supports three execution modes:
+The worker supports four execution modes:
 
 1. **Single-Agent Mode**: Simplified LangGraph workflow with a single reasoning node that performs the entire task in one step
 2. **Specialist-Agent Mode**: Full LangGraph workflow with specialist agents (skills-lead, repo-scout, solution-planner, implementers, validators)
-3. **CrewAI Mode**: Executes external CrewAI projects using pexpect-based process runner with real-time output streaming
+3. **CrewAI Mode**: Executes external CrewAI projects using a pexpect-based process runner with real-time output streaming and project discovery
+4. **CrewAI Expert Mode**: LangGraph workflow that discovers CrewAI projects, installs dependencies, generates patches, and pauses for human approval before applying them
 
 ## Current State & Goal for Personal Use
 
-**Current state:** The worker runs the full LangGraph graph inside a container, publishes state events, and can execute workspace tools (write/read files, git, tests) with the fake LLM provider. It now clones the selected repository into `/workspace` before the workflow starts. A custom CrewAI wrapper worker type discovers available agent projects and surfaces them in the UI chat session, so the user can pick which multi-agent project to run. It is **demo-ready** but not production-ready for real repositories.
+**Current state:** The worker runs inside a container created by the control-plane and publishes state and chat events back through NATS. It supports four execution modes selected in the UI. LangGraph variants execute inside the container with optional PostgreSQL checkpointing. CrewAI variants discover projects, stream output, and `crewai-expert` handles dependency patching and approval checkpoints. It is **demo-ready** but not production-ready for real repositories.
 
 **First goal:** Execute agentic AI workflows inside controlled, isolated containers, using a fully open-source stack and free local LLMs via Ollama.
 
@@ -36,18 +37,20 @@ The worker supports three execution modes:
 
 ## Next Milestone
 
-1. **Approval workflow:** Wire `waiting_approval_node` to a real LangGraph interrupt, emit `approval_required` events, and resume on `tool.allowed`/`tool.denied` user events.
-2. **Budget tracking:** Accumulate token/cost usage in `model_factory.py` and enforce `max_tokens`/`max_cost` in the graph.
-3. **End-to-end tests:** Add an integration test that starts a container, runs a workflow, and asserts `completed` is reached.
+1. **Budget tracking:** Accumulate token/cost usage in `model_factory.py` and enforce `max_tokens`/`max_cost` in the graph.
+2. **End-to-end tests:** Add an integration test that starts a container, runs a workflow, and asserts `completed` is reached.
+3. **Production readiness:** Harden workspace isolation, egress controls, and resource limits.
 
 See main [README.md](../../README.md) for future goals and milestones.
 
 **Responsibilities:**
-- LangGraph workflow execution (single-agent and specialist-agent modes)
-- CrewAI project execution with pexpect-based process runner
-- Real specialist agent implementations (skills-lead, repo-scout, solution-planner, implementers, validators) - framework implemented, not yet tested end-to-end
+- LangGraph workflow execution (`single-agent` and `specialist` modes)
+- CrewAI project execution with pexpect-based process runner (`crewai`)
+- CrewAI Expert patching workflow with dependency installation and approvals (`crewai-expert`)
+- Real specialist agent implementations (skills-lead, repo-scout, solution-planner, implementers, validators)
 - Workspace operations (read/write files, git commands, test execution)
-- NATS event publishing (agent.user.{uid}.events.{rid}.state.{event_type}, agent.user.{uid}.chat.{rid}.events)
+- NATS event publishing (`agent.user.{uid}.events.{rid}.state.{event_type}`, `agent.user.{uid}.chat.{rid}.worker.events`, `agent.control.worker.{rid}.ready`)
+- NATS user-event subscription (`agent.user.{uid}.chat.{rid}.user.events`)
 - CrewAI project discovery and workspace scanning
 - Interactive input prompt handling for CrewAI processes
 
@@ -55,6 +58,7 @@ See main [README.md](../../README.md) for future goals and milestones.
 - HTTP API endpoints (handled by agent-service)
 - PostgreSQL thread/message store (handled by agent-service)
 - ChatKit protocol implementation (handled by agent-service)
+- Container lifecycle management (handled by control-plane)
 
 ## Quick Start
 
@@ -64,31 +68,49 @@ The agent worker uses a modular Dockerfile structure where each worker type only
 
 ```bash
 # Build base image with common dependencies
-docker build -f Dockerfile.base-builder -t agentic-agent-worker-base-builder:latest .
+docker build -f Dockerfile.base-builder -t agentic-agents-platform-agent-worker-base-builder:latest .
 
 # Build specialist worker (includes playwright, database deps)
-docker build -f Dockerfile.specialist -t agentic-specialist-agent-worker:latest .
+docker build -f Dockerfile.specialist -t agentic-agents-platform-agent-worker-specialist:latest .
 
 # Build single-agent worker (includes database deps + playwright for web search)
-docker build -f Dockerfile.single-agent -t agentic-single-agent-worker:latest .
+docker build -f Dockerfile.single-agent -t agentic-agents-platform-agent-worker-single-agent:latest .
 
 # Build CrewAI worker (includes crewai, pexpect)
-docker build -f Dockerfile.crewai -t agentic-crewai-agent-worker:latest .
+docker build -f Dockerfile.crewai -t agentic-agents-platform-agent-worker-crewai:latest .
+
+# Build CrewAI Expert worker (includes crewai-expert extras for patching and approvals)
+docker build -f Dockerfile.crewai-expert -t agentic-agents-platform-agent-worker-crewai-expert:latest .
 ```
 
 **Dockerfile Structure:**
-- `Dockerfile.base-builder` - Common dependencies (langchain, langgraph, docker, nats) - **665MB**
-- `Dockerfile.specialist` - Specialist workflow + playwright + database deps - **2.28GB**
-- `Dockerfile.single-agent` - Single-agent workflow + database deps + playwright (for web search) - **760MB**
-- `Dockerfile.crewai` - CrewAI framework + pexpect - **1.85GB**
+- `Dockerfile.base-builder` - Common dependencies (langchain, langgraph, docker, nats)
+- `Dockerfile.specialist` - Specialist workflow + playwright + database deps
+- `Dockerfile.single-agent` - Single-agent workflow + database deps + playwright (for web search)
+- `Dockerfile.crewai` - CrewAI framework + pexpect
+- `Dockerfile.crewai-expert` - CrewAI Expert patching workflow + dependency tooling
 
 This modular approach reduces image size and build time by only including packages each worker type actually uses. Note that single-agent includes playwright for web search functionality, while specialist includes it for browser automation tasks.
 
 ### Run Worker Manually
 
+The worker entry point depends on the selected `AGENT_TYPE` and the corresponding `PYTHON_MODULE`. For example, to run the CrewAI worker locally for development:
+
 ```bash
-uv run python -m app.worker --run-id <run_id> --nats-url nats://localhost:4222
+cd services/agent-worker
+PYTHONPATH=/app:/app/internal/agents/crewai/src \
+  uv run python -m agent_worker.main --run-id <run_id> --nats-url nats://localhost:4222
 ```
+
+For the CrewAI Expert worker:
+
+```bash
+cd services/agent-worker
+PYTHONPATH=/app:/app/internal/agents/crewai-expert/src:/app/internal/agents/crewai/src:/app/internal/agents/patch \
+  uv run python -m crewai_expert.main --run-id <run_id> --nats-url nats://localhost:4222
+```
+
+In production the container's `PYTHON_MODULE` environment variable selects the entry point automatically.
 
 ### Run in Docker
 
@@ -96,8 +118,10 @@ uv run python -m app.worker --run-id <run_id> --nats-url nats://localhost:4222
 docker run -e RUN_ID=<run_id> \
            -e REPOSITORY_URL=<repo_url> \
            -e BRANCH=<branch> \
+           -e AGENT_TYPE=specialist \
+           -e PYTHON_MODULE=agent_worker.main \
            -e NATS_URL=nats://localhost:4222 \
-           agentic-agent-worker:latest
+           agentic-agents-platform-agent-worker-specialist:latest
 ```
 
 ### Development Environment
@@ -130,7 +154,7 @@ Run integration tests:
 make test-integration
 ```
 
-For the first-flow E2E test, the `mock-worker` container in the root `docker-compose.yml` simulates a worker by publishing `started`, `progress`, and `completed` events.
+Integration tests spin up real worker Docker containers and drive them through NATS. There is no separate `mock-worker` service in `docker-compose.yml`.
 
 ## Project Structure
 
@@ -139,6 +163,7 @@ agent-worker/
 ├── internal/
 │   ├── agents/             # Agent framework implementations
 │   │   ├── crewai/         # CrewAI integration
+│   │   ├── crewai-expert/  # CrewAI Expert patching/approval workflow
 │   │   ├── single-agent/   # Single-agent mode
 │   │   └── specialist/     # Specialist agent workflow
 │   ├── handlers/           # NATS message handlers
@@ -160,31 +185,30 @@ agent-worker/
 - `GIT_USERNAME`: Git username for authentication (optional)
 - `GIT_TOKEN`: Git token for authentication (optional)
 - `NATS_URL`: NATS server URL (default: nats://localhost:4222)
+- `DATABASE_URL`: PostgreSQL connection string for LangGraph checkpoints (optional)
 - `MOCK_MODE`: Enable mock mode for testing (default: false)
-- `LLM_PROVIDER`: LLM provider to use (ollama, openai, anthropic, fake)
-- `AGENT_TYPE`: Agent type to execute (single-agent, specialist, crewai)
+- `LLM_PROVIDER`: LLM provider to use (`ollama`, `openai`, `anthropic`, `fake`)
+- `MODEL_NAME`: Specific model name for the selected LLM provider
+- `AGENT_TYPE`: Agent type to execute (`single-agent`, `specialist`, `crewai`, `crewai-expert`)
+- `PYTHON_MODULE`: Python module that serves as the worker entry point (e.g., `agent_worker.main`, `crewai_expert.main`)
 
 ## Container Startup
 
 The container runs `scripts/container-start.sh` which:
-1. Clones the repository to `/workspace` (or creates mock structure)
+1. Clones the repository to `/workspace` (or creates a mock structure)
 2. Configures git credentials if provided
-3. Starts the worker process with `python -m app.worker --run-id $RUN_ID`
+3. Starts the worker process using the module specified by `PYTHON_MODULE`: `python -m $PYTHON_MODULE --run-id $RUN_ID`
 
 ## NATS Integration
 
 The worker uses NATS JetStream with durable consumers. It publishes to:
 - `agent.user.{uid}.events.{rid}.state.{event_type}` - State events (created, planning, implementing, completed, etc.)
-- `agent.user.{uid}.chat.{rid}.worker.events` - Worker output events (final_answer, progress_update)
+- `agent.user.{uid}.chat.{rid}.worker.events` - Worker chat output events (`progress_update`, `thread.item.done`)
 - `agent.control.worker.{rid}.ready` - Worker ready signal
 
 The worker subscribes to:
-- `agent.user.{uid}.chat.{rid}.user.events` - User events (tool.allowed, tool.denied, user_input) from agent-service
+- `agent.user.{uid}.chat.{rid}.user.events` - User events (`tool.allowed`, `tool.denied`, `user_input`) from the agent-service
 - `agent.control.worker.{rid}.close` - Control close signal for cancellation
-
-For CrewAI execution, additional NATS subjects are used:
-- `agent.user.{uid}.chat.{rid}.events` - CrewAI state and chat events
-- `agent.user.{uid}.chat.{rid}.user.events` - CrewAI user input events
 
 The worker auto-starts from environment variables and subscribes to user events for tool approval handling and interactive input prompts.
 
@@ -197,19 +221,24 @@ See `pyproject.toml` for full dependencies. Key dependencies:
 - `docker` - Docker API access
 - `pexpect` - Process spawning and output streaming for CrewAI
 - `crewai` - CrewAI framework support
+- `packaging` - Dependency version parsing (CrewAI Expert)
 
 ## Architecture
 
 ```
-NATS Command → Worker → LangGraph Workflow → NATS Events
-                      ↓
-                /workspace
-                (git repo)
+Control Plane creates Docker Workspace → Worker starts (PYTHON_MODULE)
+                                          ↓
+NATS Command / env vars → Worker → LangGraph Workflow → NATS Events
+                                          ↓
+                                    /workspace
+                                    (git repo)
 
-NATS Command → Worker → CrewAI ProcessRunner → NATS Events
-                      ↓
-                /workspace
-                (CrewAI project)
+Control Plane creates Docker Workspace → Worker starts (PYTHON_MODULE)
+                                          ↓
+NATS Command / env vars → Worker → CrewAI ProcessRunner → NATS Events
+                                          ↓
+                                    /workspace
+                                    (CrewAI project)
 ```
 
 ### CrewAI Components
@@ -222,6 +251,62 @@ The CrewAI integration includes:
 - **Events** (`internal/agents/crewai/src/agent_worker/events.py`): Event payload builders for CrewAI state and chat events
 - **NATS Handler Integration** (`internal/handlers/nats.py`): NATS message handler that detects CrewAI projects and routes to CrewAI execution
 
+### CrewAI Expert Components
+
+The `crewai-expert` variant is a specialized LangGraph agent that prepares and executes a generic CrewAI agent. It adds:
+
+- **Graph** (`internal/agents/crewai-expert/src/crewai_expert/graph.py`): LangGraph state machine for selection, dependency install, patch generation, and approval
+- **Nodes** (`internal/agents/crewai-expert/src/crewai_expert/nodes.py`): State transition nodes
+- **State** (`internal/agents/crewai-expert/src/crewai_expert/state.py`): State schema
+- **Patch Tools** (`internal/agents/crewai-expert/src/crewai_expert/patch_tools.py`): Patch generation and application
+- **Dependency Tools** (`internal/agents/crewai-expert/src/crewai_expert/dependency_tools.py`): Dependency analysis and installation
+- **Project Tools** (`internal/agents/crewai-expert/src/crewai_expert/project_tools.py`): CrewAI project discovery and metadata
+- **Approvals** (`internal/agents/crewai-expert/src/crewai_expert/approvals.py`): Approval request/response handling
+- **Worker** (`internal/agents/crewai-expert/src/crewai_expert/worker.py`) and **Main** (`internal/agents/crewai-expert/src/crewai_expert/main.py`): Entry points for the CrewAI Expert worker
+
+### CrewAI Expert Flow
+
+A simplified view of the `crewai-expert` execution flow:
+
+```mermaid
+graph LR
+    UI[Angular UI] -->|POST /api/chatkit/| AS[Agent Service]
+    AS -->|"agent.control.{rid}.start"| NATS[NATS JetStream]
+    NATS -->|"agent.control.{rid}.start"| CP[Control Plane]
+    CP -->|create container| DW[Docker Workspace]
+    DW -->|PYTHON_MODULE=crewai_expert.main| WE[Worker<br/>crewai-expert]
+
+    WE -->|1. discover projects| WS[/workspace/]
+    WE -->|2. publish project cards| NATS
+    NATS -->|project cards| AS
+    AS -->|SSE| UI
+
+    UI -->|select project / approve| AS
+    AS -->|"agent.user.{uid}.chat.{rid}.user.events"| NATS
+    NATS -->|user events| WE
+
+    WE -->|3. crewai run| CLI[CrewAI CLI<br/>pexpect subprocess]
+    CLI -->|stdout/stderr| WE
+    WE -->|4. progress + patch events| NATS
+    NATS -->|state/chat events| AS
+    AS -->|SSE| UI
+
+    WE -->|5. approval_required| NATS
+    NATS -->|approval event| AS
+    AS -->|SSE| UI
+```
+
+The source file is at [`docs/crewai-expert-flow.mmd`](../docs/crewai-expert-flow.mmd) and the rendered SVG is at [`docs/svg/crewai-expert-flow.svg`](../docs/svg/crewai-expert-flow.svg).
+
+**Flow summary:**
+1. The UI sends a chat message to the agent-service, which publishes `agent.control.{run_id}.start`.
+2. The control-plane creates a Docker workspace using the `crewai-expert` worker image and starts `crewai_expert.main`.
+3. The worker scans `/workspace`, discovers CrewAI projects, and publishes them as selectable cards to the UI via NATS.
+4. The user selects a project; the UI forwards the event as `agent.user.{uid}.chat.{rid}.user.events`.
+5. The worker prepares the CrewAI project: it inspects dependencies, generates patches, pauses at approval checkpoints, applies patches, and syncs dependencies.
+6. The worker spawns the CrewAI CLI (`crewai run`) via pexpect, streams stdout/stderr, and publishes progress updates.
+7. Final state and chat events are routed back through NATS to the agent-service and streamed to the UI via SSE.
+
 ## Separation from Agent Service
 
 - **Agent Service**: HTTP API layer (`services/agent-service`)
@@ -229,12 +314,14 @@ The CrewAI integration includes:
   - Manages ChatKit database records
   - Publishes commands to NATS
   - Handles ChatKit protocol
+  - Proxies control-plane APIs
   
 - **Agent Worker**: Workflow execution layer (`services/agent-worker`)
-  - Runs in isolated containers
-  - Executes LangGraph workflows (single-agent and specialist-agent)
-  - Executes CrewAI projects via ProcessRunner
-  - Subscribes to NATS commands
+  - Runs in isolated containers created by the control-plane
+  - Executes LangGraph workflows (`single-agent`, `specialist`)
+  - Executes CrewAI projects via `ProcessRunner` (`crewai`)
+  - Executes CrewAI Expert patching workflow (`crewai-expert`)
+  - Subscribes to NATS user events
   - Scans workspace for CrewAI projects
 
 ## Testing

@@ -16,3 +16,8 @@ func TestDockerBindOrchestrator(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "DockerBindOrchestrator Suite")
 }
+
+func TestManager(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Manager Suite")
+}

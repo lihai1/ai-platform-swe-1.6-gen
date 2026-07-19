@@ -1,11 +1,4 @@
-FROM agentic-agent-worker-base-builder:latest
-
-# Copy single-agent-specific code
-COPY services/agent-worker/internal/agents/single_agent /app/internal/agents/single_agent
-COPY services/agent-worker/internal/workflow /app/internal/workflow
-COPY services/agent-worker/internal/tools /app/internal/tools
-COPY services/agent-worker/internal/skills /app/internal/skills
-COPY services/agent-worker/internal/workspace /app/internal/workspace
+FROM agentic-agents-platform-agent-worker-base-builder:latest
 
 # Install single-agent-specific dependencies
 RUN pip install --no-cache-dir \
@@ -21,6 +14,19 @@ RUN pip install --no-cache-dir \
 
 # Install Playwright browser for web search
 RUN playwright install chromium
+
+# Copy single-agent-specific code (messaging is already in base-builder)
+COPY services/agent-worker/internal/agents/single_agent /app/internal/agents/single_agent
+COPY services/agent-worker/internal/workflow /app/internal/workflow
+COPY services/agent-worker/internal/tools /app/internal/tools
+COPY services/agent-worker/internal/skills /app/internal/skills
+COPY services/agent-worker/internal/workspace /app/internal/workspace
+COPY services/agent-worker/internal/handlers /app/internal/handlers
+COPY services/agent-worker/internal/config.py /app/internal/config.py
+COPY services/agent-worker/internal/db.py /app/internal/db.py
+COPY services/agent-worker/internal/models.py /app/internal/models.py
+COPY services/agent-worker/internal/worker_base.py /app/internal/worker_base.py
+
 
 # Set worker-specific environment variables
 ENV PYTHON_MODULE=internal.agents.single_agent.main

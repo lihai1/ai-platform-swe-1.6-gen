@@ -15,6 +15,7 @@ build/
 out/
 
 # IDE
+.windsurf/
 .vscode/
 .idea/
 *.swp

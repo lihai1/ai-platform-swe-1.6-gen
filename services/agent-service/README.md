@@ -26,7 +26,8 @@ The agent-service is the **HTTP API and messaging layer** of the platform. It do
 
 - **ChatKit Integration**: Custom ChatKit server with SSE streaming
 - **AegisChatKitServer**: Async SSE streaming response for chat messages
-- **NATS Bridge**: Subscribes to `agent.user.{uid}.events.{rid}.>` and yields ChatKit events
+- **NATS Bridge**: Wraps the NATS client to publish `agent.control.{run_id}.start` commands with full run parameters
+- **Event Streams**: In-memory per-run event streams bridged from NATS to the SSE response
 - **Event Streaming**: Real-time agent activity events via SSE
 - **NATS Messaging**: Message-based communication with control plane and agent-worker
 - **PostgreSQL Store**: Thread and message persistence
@@ -81,21 +82,9 @@ Start agent service only:
 docker-compose up -d agent-service
 ```
 
-Start with the mock worker for first-flow E2E testing:
+Start all services except the web UI for backend testing:
 ```bash
-docker-compose up -d agent-service mock-worker
-```
-
-### Worker Process
-
-Run the agent worker for a specific run:
-```bash
-uv run python -m app.worker --run-id <run_id> --nats-url nats://localhost:4222
-```
-
-Run the mock worker for first-flow E2E testing:
-```bash
-uv run python mock_worker.py
+docker-compose up -d nats postgres control-plane agent-service
 ```
 
 ## API Endpoints
@@ -106,6 +95,7 @@ uv run python mock_worker.py
 
 ### ChatKit
 - `POST /api/chatkit/` - Chat endpoint with streaming
+- `POST /api/chatkit/start` - Start an agent run without sending a chat message
 - `GET /api/chatkit/threads/{thread_id}` - Get thread history
 
 ### Control Plane Proxy Endpoints (Single Entry Point)
@@ -125,36 +115,31 @@ uv run python mock_worker.py
 The agent service uses NATS JetStream with durable consumers for reliable message delivery:
 
 ### Streams
-- **AGENT_CHAT**: Chat stream for worker output and user events (agent.user.*.chat.>)
-- **AGENT_CONTROL**: Control stream for container orchestration (agent.control.>)
-- **AGENT_EVENTS**: Event stream for agent state updates (agent.user.*.events.>)
+- **AGENT_CHAT**: Chat stream for worker output and user events (`agent.user.*.chat.>`)
+- **AGENT_CONTROL**: Control stream for container orchestration (`agent.control.>`)
+- **AGENT_EVENTS**: Event stream for agent state updates (`agent.user.*.events.>`)
+- **AGENT_ERRORS**: Error stream for worker/agent failures (`agent.user.*.chat.errors`)
 
 ### Subjects
-- **agent.control.{run_id}.start**: Publishes container creation requests
+- **agent.control.{run_id}.start**: Publishes container creation requests with run parameters
 - **agent.control.{run_id}.close**: Publishes container termination requests
 - **agent.control.{run_id}.resume**: Publishes container resume requests
+- **agent.control.worker.{run_id}.ready**: Worker ready signal
 - **agent.user.{uid}.events.{rid}.state.{event_type}**: Subscribes to state events from worker
-- **agent.user.{uid}.chat.{rid}.worker.events**: Subscribes to worker output events (final_answer, progress_update)
-- **agent.user.{uid}.chat.{rid}.user.events**: Publishes user events (tool.allowed, tool.denied, user_input) to worker
+- **agent.user.{uid}.chat.{rid}.worker.events**: Subscribes to worker chat output events (`progress_update`, `thread.item.done`)
+- **agent.user.{uid}.chat.{rid}.user.events**: Publishes user events (`tool.allowed`, `tool.denied`, `user_input`) to worker
 
 ### Message Flow
 
-1. **Chat Request**: UI → Agent Service (`POST /api/chatkit/`)
-2. **SSE Stream**: `AegisChatKitServer.respond()` yields `progress_update` and `thread.item.done` events
-3. **Container Creation**: Agent Service → NATS (`agent.control.{run_id}.start`) → Control Plane
-4. **Worker Auto-Start**: Container starts with environment variables, worker auto-starts workflow
-5. **Workflow Execution**: Worker executes LangGraph workflow
-6. **State Events**: Worker → NATS (`agent.user.{uid}.events.{rid}.state.{event_type}`) → Agent Service
-7. **Worker Output**: Worker → NATS (`agent.user.{uid}.chat.{rid}.worker.events`) → Agent Service → UI
-
-### First-Flow with mock-worker
-
-For the E2E smoke test, the `mock-worker` container is used instead of a real agent worker:
-
-1. Agent Service publishes `agent.control.{run_id}.start`
-2. `mock-worker` receives the start signal and publishes `started`, `progress`, and `completed` events
-3. Agent Service receives the events via global event stream and maps them to ChatKit protocol events
-4. SSE stream returns the events to the UI
+1. **Chat Request / Config**: UI → Agent Service (`POST /api/chatkit/`)
+2. **Thread Creation/Reuse**: Agent Service stores the thread and message in PostgreSQL
+3. **SSE Stream**: `AegisChatKitServer.respond()` returns a `StreamingResponse` and yields `progress_update` and `thread.item.done` events
+4. **Container Creation**: `NatsBridge.publish_agent_start` → NATS (`agent.control.{run_id}.start`) → Control Plane
+5. **Worker Auto-Start**: Control Plane creates the container, sets `AGENT_TYPE`/`PYTHON_MODULE`, and starts the worker
+6. **Workflow Execution**: Worker executes the selected workflow (`specialist`, `single-agent`, `crewai`, or `crewai-expert`)
+7. **State Events**: Worker → NATS (`agent.user.{uid}.events.{rid}.state.{event_type}`) → Agent Service
+8. **Worker Chat Output**: Worker → NATS (`agent.user.{uid}.chat.{rid}.worker.events`) → Agent Service → SSE → UI
+9. **User Events**: UI → Agent Service → NATS (`agent.user.{uid}.chat.{rid}.user.events`) → Worker
 
 ## Project Structure
 
@@ -165,7 +150,13 @@ agent-service/
 │   ├── agent/              # Agent-related logic
 │   ├── agents/             # Shared agent implementations
 │   ├── chatkit/            # ChatKit protocol implementation
-│   ├── handlers/           # HTTP request handlers
+│   │   ├── nats_bridge.py  # Publishes agent.control.{run_id}.start commands
+│   │   ├── event_mapper.py # Maps worker events to ChatKit SSE events
+│   │   ├── server.py       # AegisChatKitServer and SSE streaming
+│   │   ├── router.py       # ChatKit REST endpoints
+│   │   └── store.py        # PostgreSQL thread/message persistence
+│   ├── event_streams.py    # In-memory per-run event stream bridge
+│   ├── handlers/           # HTTP request handlers (NATS event consumer)
 │   ├── messaging/          # NATS messaging layer
 │   ├── skills/             # Skill definitions
 │   └── tools/              # Tool implementations
@@ -289,12 +280,15 @@ uv run pytest
 ✅ **Phase 11 Complete**: Hardening and Evaluation
 ✅ **Phase 12 Complete**: Agent Container Creation Flow
 ✅ **Phase 13 Complete**: Architecture Refactoring - Service Separation
+✅ **Phase 14 Complete**: Project Discovery and Selection
+✅ **Phase 15 Complete**: CrewAI Integration
+✅ **Phase 16 Complete**: CrewAI Expert Workflow
 
 See [PROGRESS.md](../../PROGRESS.md) for full implementation details.
 
 ## Current State & Goal for Personal Use
 
-**Current state:** `make clean-start` starts the whole stack. This service proxies UI requests to the control-plane, handles ChatKit threads, publishes `agent.control.{run_id}.start`/`close` commands, and streams worker state events to the UI. The worker now clones the selected repository into `/workspace` before the workflow starts. A custom CrewAI wrapper worker type discovers available agent projects and surfaces them in the chat session, so the user can pick which multi-agent project to run. It is not production-ready for real repositories.
+**Current state:** `make clean-start` starts the whole stack. This service proxies UI requests to the control-plane, persists chat threads/items in its own PostgreSQL schema, publishes `agent.control.{run_id}.start`/`close`/`resume` commands, and streams worker state and chat events to the UI via SSE. The UI selects one of four worker variants (`specialist`, `single-agent`, `crewai`, `crewai-expert`) which are created by the control-plane. It is not production-ready for real repositories.
 
 **First goal:** Enable secure remote control of isolated agent workflows through a single HTTP entry point, using a fully open-source stack and free local LLMs via Ollama.
 
@@ -310,11 +304,9 @@ See main [README.md](../../README.md) for future goals and milestones.
 
 ## Current Limitations
 
-- **Memory Checkpointer**: Using in-memory checkpointer instead of PostgreSQL (temporary workaround for LangGraph API issues)
-- **Mock Responses**: ChatKit returns predefined responses in mock mode (no actual LLM calls)
-- **Mock Docker Mode**: Workspace containers are simulated when MOCK_DOCKER=true
-- **Approval Workflow**: Approval UI/dialogs exist but the workflow interrupt is not wired.
-- **Budget/Cost Tracking**: `max_tokens`/`max_cost` fields are not enforced.
-- **Real E2E Tests**: Only smoke testing exists; the full chat-to-run flow is not yet automated.
+- **Budget/Cost Tracking**: `max_tokens`/`max_cost` fields are collected but not enforced during LLM calls.
+- **Approval Workflow**: Approval UI/dialogs exist and user events are forwarded to the worker; LangGraph interrupt wiring may differ by worker variant.
+- **Rate Limiting**: No API rate limiting yet.
+- **Authentication**: Login/register endpoints exist but `DISABLE_AUTH=true` is commonly used in local development.
 
 These limitations are acceptable for testing the message flow and can be addressed in future iterations.

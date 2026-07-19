@@ -132,3 +132,25 @@ func (r *ChatContainerRepository) List() ([]*models.ChatContainer, error) {
 	}
 	return containers, nil
 }
+
+// GetAllRunIDs returns a map of all valid run IDs from the chat_containers table.
+// This is used during startup to identify which containers are legitimate and should be kept,
+// versus orphaned containers that need to be cleaned up.
+func (r *ChatContainerRepository) GetAllRunIDs() (map[string]bool, error) {
+	query := `SELECT DISTINCT run_id FROM app.chat_containers`
+	rows, err := r.db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get run IDs from database: %w", err)
+	}
+	defer rows.Close()
+
+	runIDs := make(map[string]bool)
+	for rows.Next() {
+		var runID string
+		if err := rows.Scan(&runID); err != nil {
+			return nil, fmt.Errorf("failed to scan run ID: %w", err)
+		}
+		runIDs[runID] = true
+	}
+	return runIDs, nil
+}

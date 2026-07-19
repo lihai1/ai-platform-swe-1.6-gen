@@ -8,7 +8,7 @@ from internal.chatkit import chatkit_router
 from internal.agent.router import router as agent_router
 from internal.messaging.nats import NATSMessaging
 from internal.event_streams import push_event
-from internal.handlers.nats import handle_agent_state_event, handle_worker_user_event, handle_worker_ready
+from internal.handlers.nats import handle_agent_state_event, handle_worker_user_event, handle_worker_ready, handle_agent_error
 from internal.chatkit.router import nats_client, get_nats_client
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any

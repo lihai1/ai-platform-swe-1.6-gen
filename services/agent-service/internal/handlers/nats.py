@@ -1,8 +1,38 @@
 """NATS message handlers for agent service"""
+import ast
+import json
 import logging
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_waiting_input_payload(payload: dict) -> dict:
+    prompt = payload.get("prompt")
+    if not isinstance(prompt, str):
+        return payload
+
+    try:
+        request = json.loads(prompt)
+    except json.JSONDecodeError:
+        try:
+            request = ast.literal_eval(prompt)
+        except (SyntaxError, ValueError):
+            return payload
+
+    if not isinstance(request, dict):
+        return payload
+
+    return {
+        **payload,
+        "approval_request_id": request.get("approval_request_id"),
+        "approval_type": request.get("approval_type"),
+        "description": request.get("message"),
+        "message": request.get("message"),
+        "options": request.get("options"),
+        "affected_files_count": request.get("affected_files_count"),
+        "summary": request.get("summary"),
+    }
 
 
 async def handle_agent_state_event(event: dict, push_event_func) -> None:
@@ -10,6 +40,8 @@ async def handle_agent_state_event(event: dict, push_event_func) -> None:
     run_id = event.get("run_id")
     event_type = event.get("event_type")
     payload = event.get("payload", {})
+    if event_type == "waiting_input":
+        payload = _normalize_waiting_input_payload(payload)
 
     logger.info(f"Received agent state event for run {run_id}: {event_type}")
     
@@ -99,7 +131,7 @@ async def _manage_agent_step_lifecycle(run_id: str, event_type: str, payload: di
         # Check if there's an existing step for this phase
         result = await session.execute(
             select(AgentStep).where(
-                AgentStep.chat_id == run_id,
+                AgentStep.run_id == run_id,
                 AgentStep.phase == phase
             ).order_by(AgentStep.started_at.desc())
         )
@@ -115,7 +147,7 @@ async def _manage_agent_step_lifecycle(run_id: str, event_type: str, payload: di
         elif not existing_step:
             # Create a new step
             step = AgentStep(
-                chat_id=run_id,
+                run_id=run_id,
                 phase=phase,
                 agent_name=agent_name,
                 status="started",

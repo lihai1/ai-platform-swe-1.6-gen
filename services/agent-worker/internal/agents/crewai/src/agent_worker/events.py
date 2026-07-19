@@ -185,9 +185,8 @@ def chat_final(
     payload: dict[str, Any] = {
         "content": content,
         "status": status,
+        "error": error,
     }
-    if error:
-        payload["error"] = True
     if projects is not None:
         payload["projects"] = projects
     return base_event(

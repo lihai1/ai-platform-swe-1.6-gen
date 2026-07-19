@@ -140,7 +140,10 @@ async def _event_sse_generator(run_id: str) -> AsyncGenerator[str, None]:
             break
 
         event_type = event.get("event_type", "message")
-        sse_payload = f"event: {event_type}\ndata: {json.dumps(event)}\n\n"
+        # Emit all events as the default "message" event type so the UI's
+        # EventSource.onmessage handler receives every event and can dispatch
+        # based on the event_type field inside the payload.
+        sse_payload = f"event: message\ndata: {json.dumps(event)}\n\n"
         yield sse_payload
 
         if event_type in TERMINAL_EVENT_TYPES:

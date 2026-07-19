@@ -11,6 +11,13 @@ from nats.errors import Error as NATSError
 from datetime import datetime, timedelta
 import uuid
 from internal.messaging.nats_streams import get_default_stream_configs
+from agentic_shared.nats_subjects import (
+    format_event_state,
+    format_chat_user_events,
+    format_chat_worker_events,
+    format_control_worker_ready,
+    CONTROL_WORKER_READY_SUBJECT_TEMPLATE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +154,7 @@ class NATSMessaging:
         message_id: Optional[str] = None,
     ) -> str:
         """Publish an event to the event stream"""
-        subject = f"agent.user.{user_id}.events.{run_id}.state.{event_type}"
+        subject = format_event_state(user_id, run_id, event_type)
         return await self._publish_message(
             subject=subject,
             event_type=event_type,
@@ -173,7 +180,7 @@ class NATSMessaging:
         if not self.js:
             raise RuntimeError("NATS not connected")
         
-        subject = f"agent.user.{user_id}.chat.{run_id}.user.events"
+        subject = format_chat_user_events(user_id, run_id)
         consumer_name = f"{self.service_id}-{self.worker_id}-user-{user_id}-{run_id}-consumer"
         
         try:
@@ -201,7 +208,7 @@ class NATSMessaging:
                 logger.info(f"[NATS RECEIVE] Received user event on subject: {subject}")
                 logger.info(f"[NATS RECEIVE] User event payload: {json.dumps(data, indent=2)}")
                 
-                # Extract user_id from subject: agent.user.{user_id}.chat.{run_id}.user.events
+                # Extract user_id from subject
                 subject_parts = subject.split(".")
                 if len(subject_parts) >= 3:
                     data["user_id"] = subject_parts[2]
@@ -223,7 +230,7 @@ class NATSMessaging:
         message_id: Optional[str] = None,
     ) -> str:
         """Publish a chat event to the chat stream for UI updates"""
-        subject = f"agent.user.{user_id}.chat.{run_id}.worker.events"
+        subject = format_chat_worker_events(user_id, run_id)
         return await self._publish_message(
             subject=subject,
             event_type=event_type,
@@ -240,7 +247,7 @@ class NATSMessaging:
         message_id: Optional[str] = None,
     ) -> str:
         """Publish worker ready signal to the control stream"""
-        subject = f"agent.control.worker.{run_id}.ready"
+        subject = format_control_worker_ready(run_id)
         return await self._publish_message(
             subject=subject,
             event_type="worker_ready",

@@ -1,4 +1,4 @@
-import { Component, OnInit, NgZone } from '@angular/core';
+import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
@@ -32,153 +32,169 @@ interface Repository {
         <button class="btn btn-primary" (click)="showCreateModal = true">+ New Project</button>
       </div>
 
-      <div *ngIf="loading" class="loading-state">
-        <div class="loading-spinner"></div>
-        <p>Loading projects...</p>
-      </div>
+      @if (loading) {
+        <div class="loading-state">
+          <div class="loading-spinner"></div>
+          <p>Loading projects...</p>
+        </div>
+      }
 
-      <div *ngIf="error" class="error-state">
-        <p>{{ error }}</p>
-        <button class="btn btn-secondary" (click)="loadProjects()">Retry</button>
-      </div>
+      @if (error) {
+        <div class="error-state">
+          <p>{{ error }}</p>
+          <button class="btn btn-secondary" (click)="loadProjects()">Retry</button>
+        </div>
+      }
 
-      <div class="project-list" *ngIf="!loading && !error && projects.length > 0; else noProjects">
-        <div *ngFor="let project of projects" class="project-card" (click)="selectProject(project)">
-          <div class="project-icon">📁</div>
-          <div class="project-info">
-            <h3>{{ project.name }}</h3>
-            <p>{{ project.description }}</p>
-            <div class="project-repos" *ngIf="projectRepositories[project.id]">
-              <span class="repo-count">{{ projectRepositories[project.id].length }} repositories</span>
+      @if (!loading && !error) {
+        @if (projects.length > 0) {
+          <div class="project-list">
+            <div *ngFor="let project of projects" class="project-card" (click)="selectProject(project)">
+              <div class="project-icon">📁</div>
+              <div class="project-info">
+                <h3>{{ project.name }}</h3>
+                <p>{{ project.description }}</p>
+                <div class="project-repos" *ngIf="projectRepositories[project.id]">
+                  <span class="repo-count">{{ projectRepositories[project.id].length }} repositories</span>
+                </div>
+              </div>
+              <div class="project-arrow">→</div>
             </div>
           </div>
-          <div class="project-arrow">→</div>
-        </div>
-      </div>
-
-      <ng-template #noProjects>
-        <div class="empty-state">
-          <div class="empty-icon">🚀</div>
-          <h2>No projects yet</h2>
-          <p>Create your first project to start building with AI agents</p>
-          <button class="btn btn-primary" (click)="showCreateModal = true">Create Project</button>
-        </div>
-      </ng-template>
+        } @else {
+          <div class="empty-state">
+            <div class="empty-icon">🚀</div>
+            <h2>No projects yet</h2>
+            <p>Create your first project to start building with AI agents</p>
+            <button class="btn btn-primary" (click)="showCreateModal = true">Create Project</button>
+          </div>
+        }
+      }
 
       <!-- Repository Selection Modal -->
-      <div *ngIf="showRepoModal" class="modal-overlay" (click)="closeRepoModal()">
-        <div class="modal" (click)="$event.stopPropagation()">
-          <div class="modal-header">
-            <h2>Add Repository (Optional)</h2>
-            <button class="close-btn" (click)="closeRepoModal()">×</button>
-          </div>
-          <div class="modal-body">
-            <p class="info-text">Connect a GitHub repository to your project or skip to start chatting.</p>
-            
-            <div class="repo-options">
-              <button class="option-card" (click)="showGitHubForm()">
-                <div class="option-icon">🔗</div>
-                <h3>Add GitHub Repository</h3>
-                <p>Connect a repository from GitHub</p>
-              </button>
-              
-              <button class="option-card" (click)="skipRepository()">
-                <div class="option-icon">💬</div>
-                <h3>Skip for Now</h3>
-                <p>Start chatting without a repository</p>
-              </button>
+      @if (showRepoModal) {
+        <div class="modal-overlay" (click)="closeRepoModal()">
+          <div class="modal" (click)="$event.stopPropagation()">
+            <div class="modal-header">
+              <h2>Add Repository (Optional)</h2>
+              <button class="close-btn" (click)="closeRepoModal()">×</button>
             </div>
+            <div class="modal-body">
+              <p class="info-text">Connect a GitHub repository to your project or skip to start chatting.</p>
 
-            <div *ngIf="showGitHubInput" class="github-form">
-              <div class="form-group">
-                <label for="repoName">Repository Name</label>
-                <input 
-                  id="repoName" 
-                  type="text" 
-                  [(ngModel)]="newRepo.name" 
-                  (ngModelChange)="onRepoNameChange()"
-                  placeholder="my-repo"
-                  class="form-input"
-                >
-              </div>
-              <div class="form-group">
-                <label for="gitUrl">Git URL</label>
-                <input
-                  id="gitUrl"
-                  type="text"
-                  [(ngModel)]="newRepo.git_url"
-                  (ngModelChange)="onGitUrlChange()"
-                  placeholder="https://github.com/username/repo.git"
-                  class="form-input"
-                >
-              </div>
-              <div class="form-group">
-                <label for="branch">Branch</label>
-                <input 
-                  id="branch" 
-                  type="text" 
-                  [(ngModel)]="newRepo.branch" 
-                  (ngModelChange)="onBranchChange()"
-                  placeholder="main"
-                  class="form-input"
-                >
-              </div>
-              <div *ngIf="repoError" class="error-message">
-                {{ repoError }}
-              </div>
-              <div class="form-actions">
-                <button class="btn btn-secondary" (click)="showGitHubInput = false">Back</button>
-                <button class="btn btn-primary" (click)="addRepository()" [disabled]="addingRepo">
-                  {{ addingRepo ? 'Adding...' : 'Add Repository' }}
+              <div class="repo-options">
+                <button class="option-card" (click)="showGitHubForm()">
+                  <div class="option-icon">🔗</div>
+                  <h3>Add GitHub Repository</h3>
+                  <p>Connect a repository from GitHub</p>
+                </button>
+
+                <button class="option-card" (click)="skipRepository()">
+                  <div class="option-icon">💬</div>
+                  <h3>Skip for Now</h3>
+                  <p>Start chatting without a repository</p>
                 </button>
               </div>
+
+              @if (showGitHubInput) {
+                <div class="github-form">
+                  <div class="form-group">
+                    <label for="repoName">Repository Name</label>
+                    <input
+                      id="repoName"
+                      type="text"
+                      [(ngModel)]="newRepo.name"
+                      (ngModelChange)="clearRepoError()"
+                      placeholder="my-repo"
+                      class="form-input"
+                    >
+                  </div>
+                  <div class="form-group">
+                    <label for="gitUrl">Git URL</label>
+                    <input
+                      id="gitUrl"
+                      type="text"
+                      [(ngModel)]="newRepo.git_url"
+                      (ngModelChange)="clearRepoError()"
+                      placeholder="https://github.com/username/repo.git"
+                      class="form-input"
+                    >
+                  </div>
+                  <div class="form-group">
+                    <label for="branch">Branch</label>
+                    <input
+                      id="branch"
+                      type="text"
+                      [(ngModel)]="newRepo.branch"
+                      (ngModelChange)="clearRepoError()"
+                      placeholder="main"
+                      class="form-input"
+                    >
+                  </div>
+                  @if (repoError) {
+                    <div class="error-message">
+                      {{ repoError }}
+                    </div>
+                  }
+                  <div class="form-actions">
+                    <button class="btn btn-secondary" (click)="showGitHubInput = false">Back</button>
+                    <button class="btn btn-primary" (click)="addRepository()" [disabled]="addingRepo">
+                      {{ addingRepo ? 'Adding...' : 'Add Repository' }}
+                    </button>
+                  </div>
+                </div>
+              }
             </div>
           </div>
         </div>
-      </div>
+      }
 
       <!-- Create Project Modal -->
-      <div *ngIf="showCreateModal" class="modal-overlay" (click)="closeCreateModal()">
-        <div class="modal" (click)="$event.stopPropagation()">
-          <div class="modal-header">
-            <h2>Create New Project</h2>
-            <button class="close-btn" (click)="closeCreateModal()">×</button>
-          </div>
-          <div class="modal-body">
-            <div class="form-group">
-              <label for="projectName">Project Name</label>
-              <input 
-                id="projectName" 
-                type="text" 
-                [(ngModel)]="newProject.name" 
-                (ngModelChange)="onProjectNameChange()"
-                placeholder="Enter project name"
-                class="form-input"
-              >
+      @if (showCreateModal) {
+        <div class="modal-overlay" (click)="closeCreateModal()">
+          <div class="modal" (click)="$event.stopPropagation()">
+            <div class="modal-header">
+              <h2>Create New Project</h2>
+              <button class="close-btn" (click)="closeCreateModal()">×</button>
             </div>
-            <div class="form-group">
-              <label for="projectDescription">Description</label>
-              <textarea 
-                id="projectDescription" 
-                [(ngModel)]="newProject.description" 
-                (ngModelChange)="onProjectDescriptionChange()"
-                placeholder="Enter project description"
-                class="form-textarea"
-                rows="3"
-              ></textarea>
+            <div class="modal-body">
+              <div class="form-group">
+                <label for="projectName">Project Name</label>
+                <input
+                  id="projectName"
+                  type="text"
+                  [(ngModel)]="newProject.name"
+                  (ngModelChange)="clearCreateError()"
+                  placeholder="Enter project name"
+                  class="form-input"
+                >
+              </div>
+              <div class="form-group">
+                <label for="projectDescription">Description</label>
+                <textarea
+                  id="projectDescription"
+                  [(ngModel)]="newProject.description"
+                  (ngModelChange)="clearCreateError()"
+                  placeholder="Enter project description"
+                  class="form-textarea"
+                  rows="3"
+                ></textarea>
+              </div>
+              @if (createError) {
+                <div class="error-message">
+                  {{ createError }}
+                </div>
+              }
             </div>
-            <div *ngIf="createError" class="error-message">
-              {{ createError }}
+            <div class="modal-footer">
+              <button class="btn btn-secondary" (click)="closeCreateModal()">Cancel</button>
+              <button class="btn btn-primary" (click)="createProject()" [disabled]="creating">
+                {{ creating ? 'Creating...' : 'Create Project' }}
+              </button>
             </div>
-          </div>
-          <div class="modal-footer">
-            <button class="btn btn-secondary" (click)="closeCreateModal()">Cancel</button>
-            <button class="btn btn-primary" (click)="createProject()" [disabled]="creating">
-              {{ creating ? 'Creating...' : 'Create Project' }}
-            </button>
           </div>
         </div>
-      </div>
+      }
     </div>
   `,
   styles: [`
@@ -514,13 +530,13 @@ interface Repository {
 export class ProjectsComponent implements OnInit {
   projects: Project[] = [];
   projectRepositories: { [projectId: string]: Repository[] } = {};
-  loading = false;
+  loading = true;
   error: string | null = null;
   showCreateModal = false;
   creating = false;
   createError: string | null = null;
   newProject: { name: string; description: string } = { name: '', description: '' };
-  
+
   showRepoModal = false;
   showGitHubInput = false;
   currentProjectId: string | null = null;
@@ -530,8 +546,7 @@ export class ProjectsComponent implements OnInit {
 
   constructor(
     private router: Router,
-    private http: HttpClientService,
-    private ngZone: NgZone
+    private http: HttpClientService
   ) {}
 
   ngOnInit(): void {
@@ -542,40 +557,22 @@ export class ProjectsComponent implements OnInit {
     this.loading = true;
     this.error = null;
 
-    this.ngZone.run(() => {
-      try {
-        console.log('Loading projects from /api/projects');
-        this.http.get<any[]>('/api/projects').subscribe({
-          next: (projects) => {
-            console.log('Projects loaded:', projects);
-            this.projects = projects || [];
-            // Store full project objects in localStorage
-            projects.forEach((project: any) => {
-              localStorage.setItem(`project_${project.id}`, JSON.stringify(project));
-              console.log(`Stored project object for project ${project.id}`);
-            });
-            this.loading = false;
-            this.loadRepositories();
-          },
-          error: (e) => {
-            console.error('Failed to load projects:', e);
-            this.error = `Failed to load projects: ${e?.message || 'Unknown error'}. Please try again.`;
-            this.loading = false;
-          }
-        }).add(() => {
-          // Ensure loading is always set to false
-          this.loading = false;
-        });
-      } catch (e: any) {
-        console.error('Failed to load projects:', e);
-        this.error = `Failed to load projects: ${e?.message || 'Unknown error'}. Please try again.`;
-        this.loading = false;
-      }
-    });
+    try {
+      const projects = await lastValueFrom(this.http.get<Project[]>('/api/projects'));
+      this.projects = projects || [];
+      this.projects.forEach((project) => {
+        localStorage.setItem(`project_${project.id}`, JSON.stringify(project));
+      });
+      this.loading = false;
+      await this.loadRepositories();
+    } catch (e: any) {
+      console.error('Failed to load projects:', e);
+      this.error = `Failed to load projects: ${e?.message || 'Unknown error'}. Please try again.`;
+      this.loading = false;
+    }
   }
 
   async loadRepositories(): Promise<void> {
-    // Load repositories for each project in parallel
     const repoPromises = this.projects.map(async (project) => {
       try {
         const repos = await lastValueFrom(this.http.get<Repository[]>(`/api/repositories?project_id=${project.id}`));
@@ -589,22 +586,27 @@ export class ProjectsComponent implements OnInit {
     await Promise.all(repoPromises);
   }
 
-  selectProject(project: Project): void {
+  async selectProject(project: Project): Promise<void> {
     const repos = this.projectRepositories[project.id] || [];
     const repoId = repos.length > 0 ? repos[0].id : null;
     
-    // Navigate to chat with project and repository context
-    const queryParams: any = { project_id: project.id };
-    if (repoId) {
-      queryParams.repository_id = repoId;
+    // Try to fetch existing thread for this project
+    let threadId: string | null = null;
+    try {
+      const response = await lastValueFrom(this.http.get<any>(`/api/chatkit/threads/by-project/${project.id}`));
+      if (response && response.thread && response.thread.run_id) {
+        threadId = response.thread.run_id;
+        console.log(`Found existing thread ${threadId} for project ${project.id}`);
+      }
+    } catch (error) {
+      console.log(`No existing thread found for project ${project.id}, will create new one`);
     }
     
-    this.router.navigate(['/chat'], { queryParams });
+    this.navigateToChat(project.id, repoId, threadId);
   }
 
   async createProject(): Promise<void> {
-    if (!this.newProject.name.trim()) {
-      this.createError = 'Project name is required';
+    if (!this.validateProjectInput()) {
       return;
     }
 
@@ -612,31 +614,47 @@ export class ProjectsComponent implements OnInit {
     this.createError = null;
 
     try {
-      const payload = {
-        ...this.newProject,
-        organization_id: '' // backend creates default org when empty
-      };
-      const createdProject = await lastValueFrom(this.http.post<Project>('/api/projects', payload));
+      const createdProject = await this.createProjectOnServer();
       
       if (createdProject) {
-        this.projects.push(createdProject);
-        this.showCreateModal = false;
-        this.newProject = { name: '', description: '' };
-        
-        // Show repository selection modal
-        this.currentProjectId = createdProject.id;
-        this.showRepoModal = true;
+        this.handleProjectCreated(createdProject);
       } else {
         this.createError = 'Failed to create project. No response from server.';
       }
     } catch (e: any) {
-      console.error('Failed to create project:', e);
-      // Surface backend error message if available
-      const errorMessage = e?.error?.message || e?.message || 'Failed to create project. Please try again.';
-      this.createError = errorMessage;
+      this.handleProjectCreationError(e);
     } finally {
       this.creating = false;
     }
+  }
+
+  private validateProjectInput(): boolean {
+    if (!this.newProject.name.trim()) {
+      this.createError = 'Project name is required';
+      return false;
+    }
+    return true;
+  }
+
+  private async createProjectOnServer(): Promise<Project | null> {
+    const payload = {
+      ...this.newProject,
+      organization_id: '' // backend creates default org when empty
+    };
+    return await lastValueFrom(this.http.post<Project>('/api/projects', payload));
+  }
+
+  private handleProjectCreated(project: Project): void {
+    this.projects.push(project);
+    this.closeCreateModal();
+    this.currentProjectId = project.id;
+    this.showRepoModal = true;
+  }
+
+  private handleProjectCreationError(e: any): void {
+    console.error('Failed to create project:', e);
+    const errorMessage = e?.error?.message || e?.message || 'Failed to create project. Please try again.';
+    this.createError = errorMessage;
   }
 
   showGitHubForm(): void {
@@ -645,46 +663,24 @@ export class ProjectsComponent implements OnInit {
 
   closeCreateModal(): void {
     this.showCreateModal = false;
-    this.newProject = { name: '', description: '' };
-    this.createError = null;
+    this.resetCreateModal();
   }
 
   closeRepoModal(): void {
     this.showRepoModal = false;
-    this.showGitHubInput = false;
-    this.currentProjectId = null;
-    this.newRepo = { name: '', git_url: '', branch: 'main' };
-    this.repoError = null;
+    this.resetRepoModal();
   }
 
-  onProjectNameChange(): void {
+  clearCreateError(): void {
     this.createError = null;
   }
 
-  onProjectDescriptionChange(): void {
-    this.createError = null;
-  }
-
-  onRepoNameChange(): void {
-    this.repoError = null;
-  }
-
-  onGitUrlChange(): void {
-    this.repoError = null;
-  }
-
-  onBranchChange(): void {
+  clearRepoError(): void {
     this.repoError = null;
   }
 
   async addRepository(): Promise<void> {
-    if (!this.newRepo.name.trim() || !this.newRepo.git_url.trim()) {
-      this.repoError = 'Repository name and Git URL are required';
-      return;
-    }
-
-    if (!this.currentProjectId) {
-      this.repoError = 'No project selected';
+    if (!this.validateRepositoryInput()) {
       return;
     }
 
@@ -692,22 +688,13 @@ export class ProjectsComponent implements OnInit {
     this.repoError = null;
 
     try {
-      const repo = await lastValueFrom(this.http.post<Repository>('/api/repositories', {
-        project_id: this.currentProjectId,
-        name: this.newRepo.name,
-        git_url: this.newRepo.git_url,
-        branch: this.newRepo.branch || 'main'
-      }));
-
+      const repo = await this.createRepositoryOnServer();
+      
       if (repo) {
-        // Add repo to project's repository list
-        if (!this.projectRepositories[this.currentProjectId]) {
-          this.projectRepositories[this.currentProjectId] = [];
+        this.addRepositoryToProject(repo);
+        if (this.currentProjectId && repo.id) {
+          this.navigateToChat(this.currentProjectId, repo.id);
         }
-        this.projectRepositories[this.currentProjectId].push(repo);
-        
-        // Navigate to chat with project and repository
-        this.navigateToChat(this.currentProjectId, repo.id);
       } else {
         this.repoError = 'Failed to add repository. No response from server.';
       }
@@ -719,24 +706,73 @@ export class ProjectsComponent implements OnInit {
     }
   }
 
+  private validateRepositoryInput(): boolean {
+    if (!this.newRepo.name.trim() || !this.newRepo.git_url.trim()) {
+      this.repoError = 'Repository name and Git URL are required';
+      return false;
+    }
+
+    if (!this.currentProjectId) {
+      this.repoError = 'No project selected';
+      return false;
+    }
+
+    return true;
+  }
+
+  private async createRepositoryOnServer(): Promise<Repository | null> {
+    return await lastValueFrom(this.http.post<Repository>('/api/repositories', {
+      project_id: this.currentProjectId,
+      name: this.newRepo.name,
+      git_url: this.newRepo.git_url,
+      branch: this.newRepo.branch || 'main'
+    }));
+  }
+
+  private addRepositoryToProject(repo: Repository): void {
+    if (!this.currentProjectId) {
+      return;
+    }
+    
+    if (!this.projectRepositories[this.currentProjectId]) {
+      this.projectRepositories[this.currentProjectId] = [];
+    }
+    this.projectRepositories[this.currentProjectId].push(repo);
+  }
+
   skipRepository(): void {
     if (this.currentProjectId) {
       this.navigateToChat(this.currentProjectId, null);
     }
   }
 
-  navigateToChat(projectId: string, repositoryId: string | null): void {
-    this.showRepoModal = false;
-    this.showGitHubInput = false;
-    this.currentProjectId = null;
-    this.newRepo = { name: '', git_url: '', branch: 'main' };
-    this.repoError = null;
+  navigateToChat(projectId: string, repositoryId: string | null, threadId: string | null = null): void {
+    this.closeRepoModal();
 
-    const queryParams: any = { project_id: projectId };
+    const queryParams: { project_id: string; repository_id?: string; thread_id?: string } = { project_id: projectId };
     if (repositoryId) {
       queryParams.repository_id = repositoryId;
     }
-    
+    if (threadId) {
+      queryParams.thread_id = threadId;
+    }
+
     this.router.navigate(['/chat'], { queryParams });
+  }
+
+  private resetCreateModal(): void {
+    this.newProject = { name: '', description: '' };
+    this.createError = null;
+  }
+
+  private resetRepoModal(): void {
+    this.showGitHubInput = false;
+    this.currentProjectId = null;
+    this.resetRepoForm();
+    this.repoError = null;
+  }
+
+  private resetRepoForm(): void {
+    this.newRepo = { name: '', git_url: '', branch: 'main' };
   }
 }

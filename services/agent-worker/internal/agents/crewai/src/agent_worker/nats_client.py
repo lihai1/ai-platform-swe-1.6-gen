@@ -12,7 +12,11 @@ from nats.aio.subscription import Subscription
 
 from agent_worker.events import base_event
 from agent_worker.subjects import Subjects, SubjectTemplates
-from internal.messaging.nats_streams import get_crewai_stream_configs
+from agentic_shared import get_crewai_stream_configs
+from agentic_shared.nats_subjects import (
+    format_control_worker_ready,
+    STREAM_AGENT_CHAT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +95,7 @@ class CrewAINatsClient:
 
     async def publish_control_ready(self) -> None:
         """Publish worker ready signal to NATS."""
-        subject = f"agent.control.worker.{self.run_id}.ready"
+        subject = format_control_worker_ready(self.run_id)
         message = base_event(
             event_type="worker_ready",
             run_id=self.run_id,
@@ -130,7 +134,7 @@ class CrewAINatsClient:
                 logger.error("Error handling user event: %s", e)
                 await msg.nak()
 
-        sub = await self._js.subscribe(subject, cb=wrapped, stream="AGENT_CHAT")
+        sub = await self._js.subscribe(subject, cb=wrapped, stream=STREAM_AGENT_CHAT)
         self._subscriptions.append(sub)
         logger.info("Subscribed to user events on %s", subject)
 

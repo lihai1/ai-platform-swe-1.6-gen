@@ -162,6 +162,32 @@ func (k *KubernetesOrchestrator) StopContainer(containerID string) error {
 	return nil
 }
 
+// ListContainers lists all pods with optional filters
+func (k *KubernetesOrchestrator) ListContainers(filterArgs map[string]string) ([]map[string]interface{}, error) {
+	if k.mockMode {
+		return []map[string]interface{}{}, nil
+	}
+
+	pods, err := k.clientset.CoreV1().Pods(k.namespace).List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list pods: %w", err)
+	}
+
+	var containers []map[string]interface{}
+	for _, pod := range pods.Items {
+		container := map[string]interface{}{
+			"Id":     pod.Name,
+			"Names":  []string{pod.Name},
+			"Image":  pod.Spec.Containers[0].Image,
+			"State":  map[string]interface{}{"Status": string(pod.Status.Phase)},
+			"Labels": pod.Labels,
+		}
+		containers = append(containers, container)
+	}
+
+	return containers, nil
+}
+
 // RemoveContainer removes a pod
 func (k *KubernetesOrchestrator) RemoveContainer(containerID string) error {
 	if k.mockMode {

@@ -64,6 +64,20 @@ func main() {
 	log.Printf("Initialized orchestrator: type=%s, docker_socket=%s, kubernetes_namespace=%s",
 		cfg.OrchestratorType, cfg.DockerSocketPath, cfg.KubernetesNamespace)
 
+	// Clean up rogue containers on startup
+	// This removes orphaned containers from previous runs that are no longer in the database
+	log.Println("INFO: Starting orphaned container cleanup on startup...")
+	validRunIDs, err := chatContainerRepo.GetAllRunIDs()
+	if err != nil {
+		log.Printf("WARN: Failed to get valid run IDs from database, skipping container cleanup: %v", err)
+	} else {
+		log.Printf("INFO: Found %d valid run IDs in database", len(validRunIDs))
+		if err := containerManager.CleanupRogueContainers(validRunIDs); err != nil {
+			log.Printf("WARN: Container cleanup encountered errors (startup will continue): %v", err)
+		}
+	}
+	log.Println("INFO: Container cleanup completed")
+
 	// Initialize services
 	authService := service.NewAuthService(cfg.JWTSecret, userRepo)
 	projectService := service.NewProjectService(projectRepo, orgRepo, userRepo)
@@ -130,13 +144,6 @@ func main() {
 	api.HandleFunc("/repositories/{id}", repositoryHandler.UpdateRepository).Methods("PUT", "OPTIONS")
 	api.HandleFunc("/repositories/{id}", repositoryHandler.DeleteRepository).Methods("DELETE", "OPTIONS")
 
-	// Chat container routes (removed - now using NATS)
-	// api.HandleFunc("/containers", chatContainerHandler.CreateContainer).Methods("POST")
-	// api.HandleFunc("/containers", chatContainerHandler.ListContainers).Methods("GET")
-	// api.HandleFunc("/containers/{chat_id}", chatContainerHandler.GetContainer).Methods("GET")
-	// api.HandleFunc("/containers/{chat_id}/stop", chatContainerHandler.StopContainer).Methods("POST")
-	// api.HandleFunc("/containers/{chat_id}", chatContainerHandler.RemoveContainer).Methods("DELETE")
-
 	// Initialize NATS client
 	nc, err := nats.Connect(cfg.NATSURL)
 	if err != nil {
@@ -149,6 +156,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize JetStream: %v", err)
 	}
+
+	// Clean the NATS message bus to avoid processing stale messages
+	handlers.CleanNATSMessageBus(js)
 
 	// Subscribe to chat start messages on agent.control.>
 	_, err = nc.Subscribe("agent.control.>", func(msg *nats.Msg) {

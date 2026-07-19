@@ -111,13 +111,6 @@ class AegisChatKitServer(ChatKitServer[RequestContext]):
             )
             print(f"Published user_input to existing agent run {run_id}")
         else:
-            # Publish agent start event for new thread
-            await self._publish_agent_start(
-                run_id=run_id,
-                user_subject=context.user_subject,
-                prompt=prompt,
-                context=context,
-            )
             # Yield initial progress event only for new threads
             yield self._event_to_sse(ProgressUpdateEvent(
                 icon="agent",

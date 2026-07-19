@@ -2,7 +2,7 @@ from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from langchain_ollama import ChatOllama
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import BaseMessage, AIMessage
+from langchain_core.messages import BaseMessage, AIMessage, ToolCall
 from langchain_core.outputs import ChatResult, ChatGeneration
 from langchain_core.callbacks import Callbacks
 from typing import Any, Dict, List, Optional
@@ -97,13 +97,13 @@ class FakeChatModel(BaseChatModel):
         response = AIMessage(content=final_content)
         return ChatResult(generations=[ChatGeneration(message=response)])
     
-    def _next_tool_call(self) -> Optional[Dict[str, Any]]:
+    def _next_tool_call(self) -> Optional[ToolCall]:
         """Return the next deterministic tool call based on available tools and call count"""
         import uuid as uuid_mod
         tool_names = [getattr(t, "name", str(t)) for t in self._bound_tools or []]
         has = lambda n: n in tool_names
         n = self._call_count
-        call: Optional[Dict[str, Any]] = None
+        call: Optional[ToolCall] = None
 
         # go-developer writes hello.go and checks status/diff
         if has("write_file"):
@@ -119,49 +119,46 @@ class FakeChatModel(BaseChatModel):
                     "\tfmt.Println(Hello())\n"
                     "}\n"
                 )
-                call = {"name": "write_file", "args": {"file_path": "hello.go", "content": content}}
+                call = ToolCall(name="write_file", args={"file_path": "hello.go", "content": content}, id=str(uuid_mod.uuid4()))
             elif n == 2:
-                call = {"name": "git_status", "args": {}}
+                call = ToolCall(name="git_status", args={}, id=str(uuid_mod.uuid4()))
             elif n == 3:
-                call = {"name": "git_diff", "args": {}}
+                call = ToolCall(name="git_diff", args={}, id=str(uuid_mod.uuid4()))
             else:
                 # Stop after 3 tool calls for write_file case
                 return None
         # backend-test-engineer runs the real test suite
         elif has("run_tests"):
             if n == 1:
-                call = {"name": "run_tests", "args": {}}
+                call = ToolCall(name="run_tests", args={}, id=str(uuid_mod.uuid4()))
             elif n == 2:
-                call = {"name": "read_file", "args": {"file_path": "hello.go"}}
+                call = ToolCall(name="read_file", args={"file_path": "hello.go"}, id=str(uuid_mod.uuid4()))
             else:
                 return None
         # completion verifier
         elif has("git_status") and has("git_diff"):
             if n == 1:
-                call = {"name": "git_status", "args": {}}
+                call = ToolCall(name="git_status", args={}, id=str(uuid_mod.uuid4()))
             elif n == 2:
-                call = {"name": "git_diff", "args": {}}
+                call = ToolCall(name="git_diff", args={}, id=str(uuid_mod.uuid4()))
             elif n == 3:
-                call = {"name": "read_file", "args": {"file_path": "hello.go"}}
+                call = ToolCall(name="read_file", args={"file_path": "hello.go"}, id=str(uuid_mod.uuid4()))
             else:
                 return None
         # code reviewer
         elif has("git_diff") and has("read_file"):
             if n == 1:
-                call = {"name": "git_diff", "args": {}}
+                call = ToolCall(name="git_diff", args={}, id=str(uuid_mod.uuid4()))
             elif n == 2:
-                call = {"name": "read_file", "args": {"file_path": "hello.go"}}
+                call = ToolCall(name="read_file", args={"file_path": "hello.go"}, id=str(uuid_mod.uuid4()))
             else:
                 return None
         # fallback
         elif has("read_file"):
             if n == 1:
-                call = {"name": "read_file", "args": {"file_path": "hello.go"}}
+                call = ToolCall(name="read_file", args={"file_path": "hello.go"}, id=str(uuid_mod.uuid4()))
 
-        if call:
-            call["id"] = str(uuid_mod.uuid4())
-            return call
-        return None
+        return call
     
     def _final_answer(self) -> str:
         """Return a final answer based on the bound tools"""

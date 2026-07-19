@@ -1,15 +1,22 @@
-import { Component, Input, Output, EventEmitter } from '@angular/core';
+import { Component, EventEmitter, Input, OnChanges, Output, SimpleChanges } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 
 interface ApprovalRequest {
-  id: string;
-  chat_id: string;
-  action_type: string;
-  description: string;
-  tool_name: string;
-  parameters: any;
-  created_at: string;
+  id?: string;
+  chat_id?: string;
+  action_type?: string;
+  description?: string;
+  tool_name?: string;
+  parameters?: any;
+  created_at?: string;
+
+  // crewai-expert waiting_input fields
+  approval_request_id?: string;
+  approval_type?: string;
+  message?: string;
+  options?: string[];
+  affected_files_count?: number;
 }
 
 @Component({
@@ -20,23 +27,35 @@ interface ApprovalRequest {
     <div class="approval-overlay" *ngIf="visible" (click)="onBackdropClick($event)">
       <div class="approval-dialog" (click)="$event.stopPropagation()">
         <div class="dialog-header">
-          <h2>Approval Required</h2>
+          <h2>{{ isWaitingInput ? 'Input Required' : 'Approval Required' }}</h2>
           <button class="close-btn" (click)="closeDialog()">×</button>
         </div>
         
         <div class="dialog-body">
           <div class="approval-info">
-            <div class="info-row">
+            <div class="info-row" *ngIf="approval?.action_type">
               <span class="label">Action:</span>
-              <span class="value">{{ approval?.action_type }}</span>
+              <span class="value">{{ approval.action_type }}</span>
             </div>
-            <div class="info-row">
+            <div class="info-row" *ngIf="approval?.tool_name">
               <span class="label">Tool:</span>
-              <span class="value">{{ approval?.tool_name }}</span>
+              <span class="value">{{ approval.tool_name }}</span>
             </div>
-            <div class="info-row">
+            <div class="info-row" *ngIf="approval?.description">
               <span class="label">Description:</span>
-              <span class="value">{{ approval?.description }}</span>
+              <span class="value">{{ approval.description }}</span>
+            </div>
+            <div class="info-row" *ngIf="approval?.approval_type">
+              <span class="label">Type:</span>
+              <span class="value">{{ approval.approval_type }}</span>
+            </div>
+            <div class="info-row" *ngIf="titleMessage">
+              <span class="label">Message:</span>
+              <span class="value">{{ titleMessage }}</span>
+            </div>
+            <div class="info-row" *ngIf="approval?.affected_files_count">
+              <span class="label">Affected files:</span>
+              <span class="value">{{ approval.affected_files_count }}</span>
             </div>
           </div>
           
@@ -45,12 +64,25 @@ interface ApprovalRequest {
             <pre class="parameters-json">{{ formatParameters(approval.parameters) }}</pre>
           </div>
           
-          <div class="warning">
+          <div class="options-section" *ngIf="options.length > 0">
+            <h3>{{ isWaitingInput ? 'Choose an option' : 'Options' }}</h3>
+            <div class="option-buttons">
+              <button 
+                *ngFor="let option of options" 
+                class="btn btn-option" 
+                (click)="selectOption(option)" 
+                [disabled]="processing">
+                {{ option }}
+              </button>
+            </div>
+          </div>
+          
+          <div class="warning" *ngIf="!isWaitingInput">
             <strong>⚠️ Warning:</strong> This action may modify your repository or require external access.
           </div>
         </div>
         
-        <div class="dialog-footer">
+        <div class="dialog-footer" *ngIf="!isWaitingInput">
           <button class="btn btn-reject" (click)="rejectAction()" [disabled]="processing">
             {{ processing ? 'Processing...' : 'Reject' }}
           </button>
@@ -219,39 +251,107 @@ interface ApprovalRequest {
     .btn-approve:hover:not(:disabled) {
       background: #218838;
     }
+    
+    .options-section {
+      margin-bottom: 1rem;
+    }
+    
+    .options-section h3 {
+      margin: 0 0 0.5rem 0;
+      font-size: 1rem;
+      color: #1a1a1a;
+    }
+    
+    .option-buttons {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    
+    .btn-option {
+      background: #667eea;
+      color: white;
+      text-align: left;
+    }
+    
+    .btn-option:hover:not(:disabled) {
+      background: #5568d3;
+    }
   `]
 })
-export class ApprovalDialogComponent {
+export class ApprovalDialogComponent implements OnChanges {
   @Input() visible = false;
   @Input() approval: ApprovalRequest | null = null;
   @Output() approve = new EventEmitter<string>();
   @Output() reject = new EventEmitter<string>();
+  @Output() selectedOption = new EventEmitter<string>();
   @Output() close = new EventEmitter<void>();
-  
+
   processing = false;
-  
+  private approvalKey: string | undefined;
+
+  ngOnChanges(changes: SimpleChanges): void {
+    const nextApprovalKey = this.approval?.approval_request_id || this.approval?.id;
+    if (changes['approval'] && nextApprovalKey !== this.approvalKey) {
+      this.approvalKey = nextApprovalKey;
+      this.processing = false;
+    }
+  }
+
+  get isWaitingInput(): boolean {
+    return !!this.approval?.approval_request_id || !!this.approval?.approval_type || this.options.length > 0;
+  }
+
+  get titleMessage(): string {
+    const prompt = this.approval?.message || '';
+    try {
+      const parsed = JSON.parse(prompt);
+      return typeof parsed?.message === 'string' ? parsed.message : prompt;
+    } catch {
+      return prompt;
+    }
+  }
+
+  get options(): string[] {
+    const prompt = this.approval?.message || '';
+    try {
+      const parsed = JSON.parse(prompt);
+      if (Array.isArray(parsed?.options)) {
+        return parsed.options.map((o: any) => (typeof o === 'string' ? o : o?.name || String(o)));
+      }
+    } catch {
+      // prompt is not JSON, fall back to explicit options field
+    }
+    return this.approval?.options || [];
+  }
+
   onBackdropClick(event: MouseEvent) {
     if (event.target === event.currentTarget) {
       this.close.emit();
     }
   }
-  
+
   approveAction() {
     if (!this.approval) return;
     this.processing = true;
     this.approve.emit(this.approval.id);
   }
-  
+
   rejectAction() {
     if (!this.approval) return;
     this.processing = true;
     this.reject.emit(this.approval.id);
   }
-  
+
+  selectOption(option: string) {
+    this.processing = true;
+    this.selectedOption.emit(option);
+  }
+
   closeDialog() {
     this.close.emit();
   }
-  
+
   formatParameters(params: any): string {
     return JSON.stringify(params, null, 2);
   }

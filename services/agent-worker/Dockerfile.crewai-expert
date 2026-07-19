@@ -1,0 +1,61 @@
+# CrewAI Expert Worker Image
+# Builds from the repository root so that shared/, agents.md, and
+# services/agent-worker paths resolve correctly.
+FROM python:3.12-slim
+
+# Install system dependencies for git, curl, and bash.
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    bash \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv (project-local environment manager).
+# uv itself is used only inside target projects, not the worker's global interpreter.
+RUN pip install --no-cache-dir uv
+
+WORKDIR /app
+
+# Copy and install the shared package first so internal imports resolve.
+COPY shared /tmp/shared
+RUN uv pip install --system --no-cache /tmp/shared && rm -rf /tmp/shared
+
+# Copy the worker build metadata and all internal source.
+COPY services/agent-worker/pyproject.toml /app/pyproject.toml
+COPY services/agent-worker/internal /app/internal
+
+# Install the agent-worker package with the crewai-expert optional extras.
+# Using uv avoids pip backtracking and installs langgraph, nats-py, pexpect,
+# packaging, etc. in one layer without dragging in target-project crewai versions.
+RUN uv pip install --system --no-cache -e "/app[crewai-expert]"
+
+# Copy container helper scripts used by the orchestrator.
+COPY services/agent-worker/scripts/container-start.sh /app/container-start.sh
+RUN chmod +x /app/container-start.sh
+COPY services/agent-worker/scripts/clone-repo.sh /app/scripts/clone-repo.sh
+RUN chmod +x /app/scripts/clone-repo.sh
+
+# Copy coding guidelines for any in-container LLM/agent prompts.
+COPY agents.md /app/agents.md
+
+# Source path priorities:
+# - /app for the internal.* namespace package (checkpointer, messaging, etc.)
+# - /app/internal/agents/crewai-expert/src for crewai_expert
+# - /app/internal/agents/crewai/src for the extended agent_worker package
+# - /app/internal/agents/patch for the top-level final_patch_crewai module
+ENV WORKSPACE_PATH=/workspace
+ENV PYTHONPATH=/app:/app/internal/agents/crewai-expert/src:/app/internal/agents/crewai/src:/app/internal/agents/patch
+ENV PYTHON_MODULE=crewai_expert.main
+
+# Worker feature flags and defaults.
+ENV CREWAI_EXPERT_REPAIR=true
+ENV CREWAI_EXPERT_REQUIRE_PATCH_APPROVAL=true
+ENV CREWAI_EXPERT_MAX_SELECTION_ATTEMPTS=3
+ENV CREWAI_EXPERT_MAX_PATCH_ATTEMPTS=2
+ENV OLLAMA_BASE_URL=http://ollama:11434
+ENV OLLAMA_MODEL=qwen3.5:9b
+
+# The orchestrator or test harness is expected to set RUN_ID, USER_ID, NATS_URL,
+# REPOSITORY_URL, and MOCK_MODE at runtime.
+CMD ["/app/container-start.sh"]

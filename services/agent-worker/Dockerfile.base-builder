@@ -1,12 +1,25 @@
 FROM python:3.12-slim
 
-# Install system dependencies for git and Docker CLI
+# Install system dependencies for git, Docker CLI, and Playwright browser
 RUN apt-get update && apt-get install -y \
     git \
     docker-cli \
     curl \
     bash \
     ca-certificates \
+    libnss3 \
+    libnspr4 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxrandr2 \
+    libgbm1 \
+    libasound2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
@@ -15,6 +28,10 @@ WORKDIR /app
 # Copy common internal code (shared by all workers)
 COPY services/agent-worker/internal /app/internal
 COPY services/agent-worker/pyproject.toml /app/pyproject.toml
+
+# Copy shared package and install it
+COPY shared /tmp/shared
+RUN pip install /tmp/shared && rm -rf /tmp/shared
 
 # Install common dependencies (shared by langchain-based workers)
 ENV PIP_DEFAULT_TIMEOUT=300

@@ -134,7 +134,8 @@ func (d *DockerHTTPOrchestrator) CreateContainer(config ContainerConfig) (*Conta
 	}, nil
 }
 
-// StopContainer stops a running container
+// StopContainer stops a running container.
+// Accepts 304 (already stopped) and 404 (not found) as success to handle edge cases gracefully.
 func (d *DockerHTTPOrchestrator) StopContainer(containerID string) error {
 	if d.mockMode {
 		return nil
@@ -150,7 +151,8 @@ func (d *DockerHTTPOrchestrator) StopContainer(containerID string) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusAccepted {
+	// Accept 304 (not modified - already stopped) and 404 (container not found) as success
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusNotModified && resp.StatusCode != http.StatusNotFound {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed to stop container: %s", string(body))
 	}
@@ -158,7 +160,8 @@ func (d *DockerHTTPOrchestrator) StopContainer(containerID string) error {
 	return nil
 }
 
-// RemoveContainer removes a container
+// RemoveContainer removes a container with force flag.
+// Accepts 404 (already removed) as success to handle edge cases gracefully.
 func (d *DockerHTTPOrchestrator) RemoveContainer(containerID string) error {
 	if d.mockMode {
 		return nil
@@ -171,7 +174,8 @@ func (d *DockerHTTPOrchestrator) RemoveContainer(containerID string) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusAccepted {
+	// Accept 404 as success (container already removed)
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusNotFound {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed to remove container: %s", string(body))
 	}

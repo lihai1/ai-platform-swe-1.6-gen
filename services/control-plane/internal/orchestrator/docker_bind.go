@@ -157,7 +157,8 @@ func (d *DockerBindOrchestrator) CreateContainer(config ContainerConfig) (*Conta
 	}, nil
 }
 
-// StopContainer stops a running container
+// StopContainer stops a running container.
+// Accepts 304 (already stopped) and 404 (not found) as success to handle edge cases gracefully.
 func (d *DockerBindOrchestrator) StopContainer(containerID string) error {
 	if d.mockMode {
 		return nil
@@ -175,7 +176,8 @@ func (d *DockerBindOrchestrator) StopContainer(containerID string) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusAccepted {
+	// Accept 304 (not modified - already stopped) and 404 (container not found) as success
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusNotModified && resp.StatusCode != http.StatusNotFound {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed to stop container: %s", string(body))
 	}
@@ -183,7 +185,8 @@ func (d *DockerBindOrchestrator) StopContainer(containerID string) error {
 	return nil
 }
 
-// RemoveContainer removes a container
+// RemoveContainer removes a container with force flag.
+// Accepts 404 (already removed) as success to handle edge cases gracefully.
 func (d *DockerBindOrchestrator) RemoveContainer(containerID string) error {
 	if d.mockMode {
 		return nil
@@ -198,12 +201,40 @@ func (d *DockerBindOrchestrator) RemoveContainer(containerID string) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusAccepted {
+	// Accept 404 as success (container already removed)
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusNotFound {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed to remove container: %s", string(body))
 	}
 
 	return nil
+}
+
+// ListContainers lists all containers with optional filters
+func (d *DockerBindOrchestrator) ListContainers(filterArgs map[string]string) ([]map[string]interface{}, error) {
+	if d.mockMode {
+		return []map[string]interface{}{}, nil
+	}
+
+	dockerHost := d.baseURL
+
+	resp, err := d.httpClient.Get(fmt.Sprintf("%s/containers/json?all=true", dockerHost))
+	if err != nil {
+		return nil, fmt.Errorf("failed to list containers: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to list containers: %s", string(body))
+	}
+
+	var containers []map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&containers); err != nil {
+		return nil, fmt.Errorf("failed to decode list response: %w", err)
+	}
+
+	return containers, nil
 }
 
 // GetContainerStatus gets the status of a container
